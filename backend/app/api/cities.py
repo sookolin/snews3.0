@@ -1,0 +1,124 @@
+"""City management endpoints (auto-creates Telegram topics)."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends
+
+from backend.app.deps import ClientMeta, DBSession, require_permission
+from shared.enums import Permission
+from shared.logging import get_logger
+from shared.models.user import User
+from shared.schemas.city import CityCreate, CityOut, CityUpdate
+from shared.schemas.common import Message, Page, PaginationParams
+from shared.services.audit_service import AuditService
+from shared.services.city_service import CityService
+from shared.services.telegram_admin import TelegramAdminService
+
+router = APIRouter()
+log = get_logger("api.cities")
+
+
+@router.get("", response_model=Page[CityOut])
+async def list_cities(
+    session: DBSession,
+    params: PaginationParams = Depends(),
+    active_only: bool = False,
+    _: User = Depends(require_permission(Permission.CITY_VIEW)),
+) -> Page[CityOut]:
+    cities, total = await CityService(session).list(params.offset, params.size, active_only)
+    return Page.create([CityOut.model_validate(c) for c in cities], total, params)
+
+
+@router.post("", response_model=CityOut, status_code=201)
+async def create_city(
+    payload: CityCreate,
+    session: DBSession,
+    meta: ClientMeta,
+    actor: User = Depends(require_permission(Permission.CITY_MANAGE)),
+) -> CityOut:
+    service = CityService(session)
+    city = await service.create(payload)
+
+    # Auto-create the Telegram topic for this city (best-effort).
+    try:
+        topic_id = await TelegramAdminService().create_city_topic(city)
+        if topic_id is not None:
+            city.telegram_topic_id = topic_id
+            await session.flush()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("topic_create_skipped", city=city.id, error=str(exc))
+
+    await AuditService(session).log(
+        "city.create",
+        user_id=actor.id,
+        actor=actor.email,
+        entity_type="city",
+        entity_id=city.id,
+        **meta,
+    )
+    return CityOut.model_validate(city)
+
+
+@router.get("/{city_id}", response_model=CityOut)
+async def get_city(
+    city_id: int,
+    session: DBSession,
+    _: User = Depends(require_permission(Permission.CITY_VIEW)),
+) -> CityOut:
+    city = await CityService(session).get_or_404(city_id)
+    return CityOut.model_validate(city)
+
+
+@router.patch("/{city_id}", response_model=CityOut)
+async def update_city(
+    city_id: int,
+    payload: CityUpdate,
+    session: DBSession,
+    meta: ClientMeta,
+    actor: User = Depends(require_permission(Permission.CITY_MANAGE)),
+) -> CityOut:
+    city = await CityService(session).update(city_id, payload)
+    await AuditService(session).log(
+        "city.update",
+        user_id=actor.id,
+        actor=actor.email,
+        entity_type="city",
+        entity_id=city_id,
+        changes=payload.model_dump(exclude_unset=True),
+        **meta,
+    )
+    return CityOut.model_validate(city)
+
+
+@router.delete("/{city_id}", response_model=Message)
+async def delete_city(
+    city_id: int,
+    session: DBSession,
+    meta: ClientMeta,
+    actor: User = Depends(require_permission(Permission.CITY_MANAGE)),
+) -> Message:
+    await CityService(session).delete(city_id)
+    await AuditService(session).log(
+        "city.delete",
+        user_id=actor.id,
+        actor=actor.email,
+        entity_type="city",
+        entity_id=city_id,
+        **meta,
+    )
+    return Message(detail="City deleted")
+
+
+@router.post("/{city_id}/create-topic", response_model=CityOut)
+async def create_topic(
+    city_id: int,
+    session: DBSession,
+    _: User = Depends(require_permission(Permission.CITY_MANAGE)),
+) -> CityOut:
+    """Manually (re)create the Telegram topic for a city."""
+    service = CityService(session)
+    city = await service.get_or_404(city_id)
+    topic_id = await TelegramAdminService().create_city_topic(city)
+    if topic_id is not None:
+        city = await service.set_topic_id(city_id, topic_id)
+    return CityOut.model_validate(city)

@@ -1,0 +1,106 @@
+name: citynews
+
+x-backend-build: &backend-build
+  build:
+    context: .
+    dockerfile: docker/backend.Dockerfile
+  env_file: .env
+  restart: unless-stopped
+  volumes:
+    - media_data:/data/media
+    - backup_data:/data/backups
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-citynews}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-citynews_password}
+      POSTGRES_DB: ${POSTGRES_DB:-citynews}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-citynews}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "6379:6379"
+
+  backend:
+    <<: *backend-build
+    command: ["api"]
+    ports:
+      - "8000:8000"
+
+  worker:
+    <<: *backend-build
+    command: ["worker"]
+
+  beat:
+    <<: *backend-build
+    command: ["beat"]
+
+  bot:
+    <<: *backend-build
+    command: ["bot"]
+
+  flower:
+    <<: *backend-build
+    command: ["flower"]
+    ports:
+      - "5555:5555"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/proxy_params.conf:/etc/nginx/proxy_params.conf:ro
+      - media_data:/data/media:ro
+      - ./docker/nginx/certbot/conf:/etc/letsencrypt:ro
+      - ./docker/nginx/certbot/www:/var/www/certbot:ro
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+
+volumes:
+  pg_data:
+  redis_data:
+  media_data:
+  backup_data:
