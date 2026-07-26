@@ -63,6 +63,22 @@ async def _notify_moderation(session, news_id: int) -> None:  # type: ignore[no-
         await session.commit()
 
 
+@celery_app.task(name="workers.tasks.notify_moderation", bind=True, max_retries=2)
+def notify_moderation(self, news_id: int) -> dict:  # type: ignore[no-untyped-def]
+    """Send (or resend) a moderation card for a single news item to its topic."""
+
+    async def _run() -> dict:
+        async with session_scope() as session:
+            await _notify_moderation(session, news_id)
+        return {"news_id": news_id, "notified": True}
+
+    try:
+        return run_async(_run())
+    except Exception as exc:  # noqa: BLE001
+        log.error("notify_moderation_failed", news=news_id, error=str(exc))
+        raise self.retry(exc=exc, countdown=30) from exc
+
+
 @celery_app.task(name="workers.tasks.dispatch_due_sources")
 def dispatch_due_sources() -> dict:
     """Enqueue ingestion for every active source whose interval has elapsed."""

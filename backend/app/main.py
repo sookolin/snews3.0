@@ -82,6 +82,15 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
+
+    # Serve uploaded media directly (dev + as a fallback behind nginx).
+    import os
+
+    from fastapi.staticfiles import StaticFiles
+
+    os.makedirs(settings.media_root, exist_ok=True)
+    app.mount("/media", StaticFiles(directory=settings.media_root), name="media")
+
     return app
 
 

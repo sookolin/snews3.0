@@ -29,6 +29,15 @@ class BaseAIProvider(abc.ABC):
         self.api_key = api_key
         self.model = model or ""
 
+    @property
+    def base_url(self) -> str | None:
+        """Custom endpoint configured on the profile (DB), if any."""
+        return (getattr(self.profile, "base_url", None) or "").strip() or None
+
+    @property
+    def embedding_model(self) -> str | None:
+        return (getattr(self.profile, "embedding_model", None) or "").strip() or None
+
     def build_system_prompt(self) -> str:
         """Combine the profile prompt with tone/style/extra instructions."""
         parts = [self.profile.system_prompt]

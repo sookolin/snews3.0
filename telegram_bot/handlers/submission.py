@@ -31,11 +31,43 @@ log = get_logger("bot.submission")
 
 _LANG = "ru"
 
+_EXT = {
+    "photo": ".jpg",
+    "video": ".mp4",
+    "animation": ".mp4",
+    "document": ".bin",
+    "audio": ".mp3",
+    "voice": ".ogg",
+    "video_note": ".mp4",
+}
+
+
+async def _download_media(bot, file_id: str, media_type: str, news_id: int, position: int) -> str | None:  # type: ignore[no-untyped-def]
+    """Download a Telegram file to MEDIA_ROOT; return the relative path."""
+    import os
+
+    from shared.config import settings
+
+    try:
+        tg_file = await bot.get_file(file_id)
+        rel_dir = os.path.join("news", str(news_id))
+        abs_dir = os.path.join(settings.media_root, rel_dir)
+        os.makedirs(abs_dir, exist_ok=True)
+        ext = os.path.splitext(tg_file.file_path or "")[1] or _EXT.get(media_type, ".bin")
+        rel_path = os.path.join(rel_dir, f"{file_id[:16]}_{position}{ext}")
+        abs_path = os.path.join(settings.media_root, rel_path)
+        await bot.download_file(tg_file.file_path, destination=abs_path)
+        return rel_path
+    except Exception as exc:  # noqa: BLE001
+        log.warning("bot_media_download_failed", file_id=file_id, error=str(exc))
+        return None
+
 
 class Submit(StatesGroup):
     choosing_city = State()
     entering_text = State()
     attaching_media = State()
+    attaching_location = State()
     choosing_anonymity = State()
 
 
@@ -124,6 +156,21 @@ async def attaching_media(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(Submit.attaching_media, F.data == "sub_done")
 async def media_done(callback: CallbackQuery, state: FSMContext) -> None:
+    """After media, ask for an optional geolocation."""
+    await state.set_state(Submit.attaching_location)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Пропустить", callback_data="sub_geo_skip")]
+        ]
+    )
+    await callback.message.answer(
+        "Прикрепите геолокацию (кнопка «скрепка» → Геопозиция) или нажмите «Пропустить».",
+        reply_markup=keyboard,
+    )
+    await callback.answer()
+
+
+async def _ask_anonymity(message: Message, state: FSMContext) -> None:
     await state.set_state(Submit.choosing_anonymity)
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -133,7 +180,26 @@ async def media_done(callback: CallbackQuery, state: FSMContext) -> None:
             ]
         ]
     )
-    await callback.message.answer(t("bot.anonymous_q", _LANG), reply_markup=keyboard)
+    await message.answer(t("bot.anonymous_q", _LANG), reply_markup=keyboard)
+
+
+@router.message(Submit.attaching_location, F.location)
+async def got_location(message: Message, state: FSMContext) -> None:
+    loc = message.location
+    venue = message.venue
+    await state.update_data(
+        latitude=loc.latitude,
+        longitude=loc.longitude,
+        location_title=(venue.title if venue else None),
+        location_address=(venue.address if venue else None),
+    )
+    await message.answer("Геолокация добавлена.")
+    await _ask_anonymity(message, state)
+
+
+@router.callback_query(Submit.attaching_location, F.data == "sub_geo_skip")
+async def skip_location(callback: CallbackQuery, state: FSMContext) -> None:
+    await _ask_anonymity(callback.message, state)
     await callback.answer()
 
 
@@ -157,16 +223,24 @@ async def finalize(callback: CallbackQuery, state: FSMContext) -> None:
             submitted_by_telegram_id=user.id,
             submitted_anonymously=anonymous,
             author_name=author_name,
+            latitude=data.get("latitude"),
+            longitude=data.get("longitude"),
+            location_title=data.get("location_title"),
+            location_address=data.get("location_address"),
         )
         session.add(news)
         await session.flush()
 
         for position, item in enumerate(data.get("media", [])):
+            rel_path = await _download_media(
+                callback.bot, item["file_id"], item["type"], news.id, position
+            )
             session.add(
                 MediaAsset(
                     news_id=news.id,
                     type=MediaType(item["type"]),
                     telegram_file_id=item["file_id"],
+                    file_path=rel_path,
                     position=position,
                 )
             )

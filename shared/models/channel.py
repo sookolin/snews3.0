@@ -27,6 +27,9 @@ class Channel(Base, TimestampMixin):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     # Telegram chat id (e.g. -1001234567890) or @username
     chat_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Public @username (for preview link), and avatar image URL for preview
+    username: Mapped[str | None] = mapped_column(String(64))
+    avatar_url: Mapped[str | None] = mapped_column(String(2048))
     # Optional topic id if the channel is a forum
     topic_id: Mapped[int | None] = mapped_column(Integer)
 

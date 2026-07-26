@@ -38,7 +38,7 @@ export default function LoginPage() {
       <form onSubmit={submit} className="card w-full max-w-sm space-y-4 p-8">
         <div className="flex items-center justify-center gap-2">
           <ImageIcon className="h-7 w-7 text-primary" />
-          <span className="text-xl font-semibold">CityNews</span>
+          <span className="text-xl font-semibold tracking-wide">SNEWS</span>
         </div>
         <p className="text-center text-sm text-muted-foreground">Панель администратора</p>
 

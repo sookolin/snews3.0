@@ -21,6 +21,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "notifications.email_enabled": {"value": False, "category": "notifications"},
     "notifications.webhook_url": {"value": "", "category": "notifications"},
     "ui.default_language": {"value": "ru", "category": "ui"},
+    "site.favicon_url": {"value": "", "category": "ui"},
 }
 
 

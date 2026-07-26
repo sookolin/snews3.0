@@ -16,6 +16,9 @@ class AIProfileBase(BaseModel):
     is_active: bool = True
     provider: AIProviderType = AIProviderType.ANTHROPIC
     model: str | None = None
+    api_key: str | None = None
+    base_url: str | None = None
+    embedding_model: str | None = None
     system_prompt: str
     instructions: str | None = None
     tone: str | None = None
@@ -35,6 +38,9 @@ class AIProfileUpdate(BaseModel):
     is_active: bool | None = None
     provider: AIProviderType | None = None
     model: str | None = None
+    api_key: str | None = None
+    base_url: str | None = None
+    embedding_model: str | None = None
     system_prompt: str | None = None
     instructions: str | None = None
     tone: str | None = None
@@ -51,6 +57,10 @@ class AIProfileOut(ORMModel):
     is_active: bool
     provider: AIProviderType
     model: str | None
+    base_url: str | None
+    embedding_model: str | None
+    # api_key is write-only; expose only whether it is set.
+    has_api_key: bool = False
     system_prompt: str
     instructions: str | None
     tone: str | None
@@ -59,3 +69,9 @@ class AIProfileOut(ORMModel):
     max_tokens: int
     generate_embeddings: bool
     created_at: datetime
+
+    @classmethod
+    def from_model(cls, obj: object) -> "AIProfileOut":
+        data = cls.model_validate(obj)
+        data.has_api_key = bool(getattr(obj, "api_key", None))
+        return data

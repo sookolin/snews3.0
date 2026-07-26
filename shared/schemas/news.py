@@ -23,6 +23,7 @@ class NewsCreate(BaseModel):
     submitted_by_telegram_id: int | None = None
     submitted_anonymously: bool = False
     author_name: str | None = None
+    buttons: list = Field(default_factory=list)
 
 
 class NewsUpdate(BaseModel):
@@ -37,6 +38,11 @@ class NewsUpdate(BaseModel):
     status: NewsStatus | None = None
     rejection_reason: str | None = None
     edit_comment: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    location_title: str | None = None
+    location_address: str | None = None
+    buttons: list | None = None
 
 
 class NewsListItem(ORMModel):
@@ -49,6 +55,8 @@ class NewsListItem(ORMModel):
     source_id: int | None
     match_score: float | None
     is_spoiler: bool
+    author_name: str | None
+    submitted_anonymously: bool
     scheduled_at: datetime | None
     published_at: datetime | None
     created_at: datetime
@@ -74,6 +82,11 @@ class NewsOut(ORMModel):
     apply_watermark: bool
     scheduled_at: datetime | None
     published_at: datetime | None
+    latitude: float | None
+    longitude: float | None
+    location_title: str | None
+    location_address: str | None
+    buttons: list
     submitted_by_telegram_id: int | None
     submitted_anonymously: bool
     author_name: str | None

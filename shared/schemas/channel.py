@@ -14,6 +14,8 @@ class ChannelBase(BaseModel):
     city_id: int
     title: str = Field(min_length=1, max_length=255)
     chat_id: str = Field(min_length=1, max_length=64)
+    username: str | None = None
+    avatar_url: str | None = None
     topic_id: int | None = None
     publish_mode: ChannelPublishMode = ChannelPublishMode.IMMEDIATE
     is_active: bool = True
@@ -30,6 +32,8 @@ class ChannelCreate(ChannelBase):
 class ChannelUpdate(BaseModel):
     title: str | None = None
     chat_id: str | None = None
+    username: str | None = None
+    avatar_url: str | None = None
     topic_id: int | None = None
     publish_mode: ChannelPublishMode | None = None
     is_active: bool | None = None
@@ -44,6 +48,8 @@ class ChannelOut(ORMModel):
     city_id: int
     title: str
     chat_id: str
+    username: str | None
+    avatar_url: str | None
     topic_id: int | None
     publish_mode: ChannelPublishMode
     is_active: bool

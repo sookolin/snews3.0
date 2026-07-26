@@ -15,4 +15,6 @@ data
 !.env.example
 docs
 tests
+# Exclude markdown except README.md (needed by pyproject readme field)
 *.md
+!README.md

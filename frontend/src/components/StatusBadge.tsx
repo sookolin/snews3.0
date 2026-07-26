@@ -12,10 +12,22 @@ const STATUS_STYLES: Record<string, string> = {
   duplicate: "bg-gray-100 text-gray-600",
 };
 
+export const STATUS_LABELS: Record<string, string> = {
+  new: "Новая",
+  processing: "Обработка",
+  pending: "На модерации",
+  approved: "Одобрена",
+  rejected: "Отклонена",
+  scheduled: "Запланирована",
+  published: "Опубликована",
+  failed: "Ошибка",
+  duplicate: "Дубликат",
+};
+
 export function StatusBadge({ status }: { status: string }) {
   return (
     <span className={cn("badge", STATUS_STYLES[status] ?? "bg-slate-100 text-slate-700")}>
-      {status}
+      {STATUS_LABELS[status] ?? status}
     </span>
   );
 }

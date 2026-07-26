@@ -65,6 +65,18 @@ class MediaService:
     async def process_asset(self, asset: MediaAsset, apply_watermark: bool = True) -> None:
         """Watermark an image/video asset in place (sets ``processed_path``)."""
         source_rel = asset.file_path
+        # If we only have a remote URL, download it first so we can watermark it.
+        if not source_rel and asset.remote_url:
+            try:
+                rel_path, mime, size = await self.download(
+                    asset.remote_url, subdir=f"news/{asset.news_id}"
+                )
+                asset.file_path = rel_path
+                asset.mime_type = asset.mime_type or mime
+                asset.file_size = asset.file_size or size
+                source_rel = rel_path
+            except Exception as exc:  # noqa: BLE001
+                log.warning("remote_download_failed", asset=asset.id, error=str(exc))
         if not source_rel:
             return
         src_abs = self._abs(source_rel)

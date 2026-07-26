@@ -18,6 +18,13 @@ class PublishRequest:
     media: list[MediaAsset] = field(default_factory=list)
     disable_web_preview: bool = True
     is_spoiler: bool = False
+    # Optional geolocation attached to the post.
+    latitude: float | None = None
+    longitude: float | None = None
+    location_title: str | None = None
+    location_address: str | None = None
+    # Inline keyboard: list of rows, each a list of {"text": str, "url": str}.
+    buttons: list = field(default_factory=list)
 
 
 @dataclass

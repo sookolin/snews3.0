@@ -76,6 +76,15 @@ class News(Base, TimestampMixin):
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Geolocation (attached to the post as a Telegram location/venue)
+    latitude: Mapped[float | None] = mapped_column(Float)
+    longitude: Mapped[float | None] = mapped_column(Float)
+    location_title: Mapped[str | None] = mapped_column(String(255))
+    location_address: Mapped[str | None] = mapped_column(String(512))
+
+    # Inline keyboard buttons: list of rows, each row a list of {text, url}.
+    buttons: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+
     # User submission metadata
     submitted_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
     submitted_anonymously: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -92,7 +101,10 @@ class News(Base, TimestampMixin):
 
     city: Mapped[City | None] = relationship(back_populates="news")
     media: Mapped[list[MediaAsset]] = relationship(
-        back_populates="news", cascade="all, delete-orphan", order_by="MediaAsset.position"
+        back_populates="news",
+        cascade="all, delete-orphan",
+        order_by="MediaAsset.position",
+        lazy="selectin",
     )
     versions: Mapped[list[NewsVersion]] = relationship(
         back_populates="news",

@@ -6,6 +6,7 @@ metadata, which is required for Alembic autogeneration and ``create_all``.
 
 from __future__ import annotations
 
+from shared.models.ad import Ad
 from shared.models.ai import AIProfile
 from shared.models.audit import AuditLog
 from shared.models.channel import Channel
@@ -19,6 +20,7 @@ from shared.models.user import User
 from shared.models.watermark import WatermarkProfile
 
 __all__ = [
+    "Ad",
     "AIProfile",
     "AuditLog",
     "Channel",

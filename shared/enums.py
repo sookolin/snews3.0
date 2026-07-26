@@ -79,6 +79,14 @@ class TemplateFormat(str, Enum):
     TELEGRAM_HTML = "telegram_html"
 
 
+class AdStatus(str, Enum):
+    DRAFT = "draft"
+    SCHEDULED = "scheduled"
+    PUBLISHED = "published"
+    ARCHIVED = "archived"
+    FAILED = "failed"
+
+
 class NotificationChannel(str, Enum):
     TELEGRAM = "telegram"
     EMAIL = "email"

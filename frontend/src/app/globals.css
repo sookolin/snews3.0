@@ -2,28 +2,144 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Palette (s-vp blue admin style) ─────────────────────────────────────── */
 :root {
   color-scheme: light;
+  --background: 210 40% 98%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --border: 214 32% 91%;
+  --primary: 221 83% 53%;          /* blue-600 */
+  --primary-foreground: 0 0% 100%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 47%;
+  --sidebar: 222 47% 14%;          /* dark navy sidebar */
+  --accent: 221 83% 53%;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: 222 47% 8%;
+  --foreground: 210 40% 96%;
+  --card: 222 40% 12%;
+  --border: 217 30% 22%;
+  --primary: 217 91% 60%;
+  --primary-foreground: 0 0% 100%;
+  --muted: 217 33% 18%;
+  --muted-foreground: 215 20% 65%;
+  --sidebar: 222 47% 10%;
+  --accent: 217 91% 60%;
 }
 
 body {
-  @apply bg-muted text-foreground antialiased;
+  @apply bg-background text-foreground antialiased;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
 .card {
-  @apply bg-card border border-border rounded-lg shadow-sm;
+  @apply rounded-xl border border-border bg-card shadow-sm ring-1 ring-black/[0.02];
 }
 
 .btn {
-  @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50;
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold shadow-sm transition-all
+         focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary
+         disabled:cursor-not-allowed disabled:opacity-50;
 }
-.btn-primary { @apply btn bg-primary text-primary-foreground hover:opacity-90; }
-.btn-outline { @apply btn border border-border bg-card hover:bg-muted; }
+.btn-primary { @apply btn bg-primary text-primary-foreground hover:brightness-110 active:brightness-95; }
+.btn-outline { @apply btn border border-border bg-card text-foreground shadow-none hover:bg-muted; }
 .btn-danger  { @apply btn bg-red-600 text-white hover:bg-red-700; }
 
 .input {
-  @apply w-full rounded-md border border-border bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30;
+  @apply block w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground shadow-sm
+         outline-none transition placeholder:text-muted-foreground/60
+         focus:border-primary focus:ring-2 focus:ring-primary/25;
 }
 
 .badge { @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium; }
+
+/* Refined table look */
+table thead th { @apply text-xs font-semibold uppercase tracking-wide; }
+table tbody tr { @apply transition-colors hover:bg-muted/50; }
+
+/* ── iOS-style Telegram preview ──────────────────────────────────────────── */
+.ios-tg {
+  @apply mx-auto w-full max-w-[380px] overflow-hidden rounded-[28px] border shadow-xl;
+  border-color: rgba(0, 0, 0, 0.08);
+  background: #e6ebf1;                 /* iOS chat wallpaper base */
+  background-image:
+    radial-gradient(circle at 20% 20%, rgba(120, 170, 255, 0.25), transparent 40%),
+    radial-gradient(circle at 80% 60%, rgba(180, 140, 255, 0.22), transparent 45%);
+}
+.dark .ios-tg { background: #0f1620; border-color: rgba(255,255,255,0.08); }
+
+.ios-tg-nav {
+  @apply flex items-center justify-between px-3 py-2;
+  background: rgba(248, 248, 248, 0.92);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(0,0,0,0.07);
+}
+.dark .ios-tg-nav { background: rgba(24,30,38,0.92); border-color: rgba(255,255,255,0.07); }
+.ios-tg-back { @apply w-12 text-[13px] font-medium text-sky-500; }
+.ios-tg-navtitle { @apply flex flex-1 items-center justify-center gap-2 text-gray-900 dark:text-white; }
+.ios-tg-navavatar {
+  @apply flex h-7 w-7 items-center justify-center rounded-full bg-cover bg-center text-xs font-semibold text-white;
+  background-color: #5b8def;
+  background-image: linear-gradient(135deg, #5b8def, #9b7bea);
+}
+
+.ios-tg-chat { @apply px-3 py-4; }
+
+.ios-tg-bubble {
+  @apply relative max-w-[300px] overflow-hidden rounded-2xl bg-white shadow-sm;
+  border-top-left-radius: 6px;
+}
+.dark .ios-tg-bubble { @apply bg-[#1e2732] text-gray-100; }
+
+/* Album grid */
+.ios-tg-album { @apply grid gap-0.5; }
+.ios-tg-album.album-1 { grid-template-columns: 1fr; }
+.ios-tg-album.album-2 { grid-template-columns: 1fr 1fr; }
+.ios-tg-album.album-3 { grid-template-columns: 1fr 1fr; }
+.ios-tg-album.album-4 { grid-template-columns: 1fr 1fr; }
+.ios-tg-cell { @apply relative overflow-hidden bg-black/5; aspect-ratio: 1 / 1; }
+.ios-tg-album.album-1 .ios-tg-cell { aspect-ratio: 4 / 3; }
+.ios-tg-cell img, .ios-tg-cell video { @apply h-full w-full object-cover; }
+.ios-tg-spoiler { filter: blur(18px); transform: scale(1.1); }
+.ios-tg-spoiler-badge {
+  @apply absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/60 px-3 py-1 text-xs font-medium text-white;
+}
+.ios-tg-more {
+  @apply absolute inset-0 flex items-center justify-center bg-black/50 text-xl font-semibold text-white;
+}
+
+.ios-tg-body { @apply px-3 py-2; }
+.ios-tg-title { @apply mb-0.5 text-[15px] font-bold leading-snug text-gray-900 dark:text-white; }
+.ios-tg-text {
+  @apply whitespace-pre-wrap break-words text-[15px] leading-snug text-gray-900 dark:text-gray-100;
+}
+.ios-tg-text a { @apply text-sky-500; }
+.ios-tg-text .tg-spoiler, .ios-tg-text tg-spoiler {
+  @apply rounded bg-gray-400/60 text-transparent;
+}
+.ios-tg-loc {
+  @apply mt-1.5 inline-flex items-center gap-1 rounded-lg bg-black/5 px-2 py-1 text-[13px] text-gray-700 dark:bg-white/10 dark:text-gray-200;
+}
+.ios-tg-meta { @apply mt-1 flex items-center justify-end gap-2 text-[11px] text-gray-400; }
+
+.ios-tg-reactions { @apply flex flex-wrap gap-1.5 px-3 pb-2; }
+.ios-tg-reaction {
+  @apply inline-flex items-center gap-1 rounded-full bg-sky-500/10 px-2 py-0.5 text-[13px] text-sky-600 dark:text-sky-300;
+}
+.ios-tg-reaction-count { @apply text-[11px] opacity-80; }
+
+.ios-tg-buttons { @apply mt-1.5 max-w-[300px] space-y-1.5; }
+.ios-tg-btn {
+  @apply flex-1 rounded-xl bg-white/90 px-3 py-2 text-center text-[14px] font-medium text-sky-600 shadow-sm dark:bg-[#1e2732] dark:text-sky-300;
+}
+
+.ios-tg-comments {
+  @apply flex items-center justify-center gap-2 border-t py-3 text-[14px] font-medium text-sky-500;
+  border-color: rgba(0,0,0,0.07);
+  background: rgba(248,248,248,0.9);
+}
+.dark .ios-tg-comments { background: rgba(24,30,38,0.9); border-color: rgba(255,255,255,0.07); }

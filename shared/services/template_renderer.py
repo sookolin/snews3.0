@@ -33,6 +33,7 @@ class TemplateRenderer:
         source: str = "",
         source_url: str = "",
         city: str = "",
+        author: str = "",
         published_at: datetime | None = None,
     ) -> str:
         """Return the fully rendered publication text."""
@@ -45,6 +46,7 @@ class TemplateRenderer:
             source=self._prepare(source, template.format),
             source_url=source_url,
             city=self._prepare(city, template.format),
+            author=self._prepare(author, template.format),
             date=date_str,
             link=link,
             footer="",
@@ -59,7 +61,29 @@ class TemplateRenderer:
             template.footer.format_map(variables),
         ]
         rendered = template.separator.join(p for p in parts if p.strip())
+        rendered = self._drop_empty_label_lines(rendered)
         return rendered.strip()
+
+    @staticmethod
+    def _drop_empty_label_lines(text: str) -> str:
+        """Remove lines that are just an empty label like 'Источник:' / 'Автор:'.
+
+        Also collapses 'Источник:' style HTML-link labels whose value/link is
+        empty. Keeps the rest of the layout intact.
+        """
+        import re
+
+        cleaned_lines: list[str] = []
+        # A line is dropped if, after stripping HTML tags, it is a label ending
+        # with ':' and nothing meaningful after it.
+        label_re = re.compile(r"^\s*[^:<>]{1,40}:\s*$")
+        for line in text.split("\n"):
+            stripped_tags = re.sub(r"<[^>]+>", "", line).strip()
+            if label_re.match(stripped_tags):
+                continue
+            cleaned_lines.append(line)
+        result = "\n".join(cleaned_lines)
+        return re.sub(r"\n{3,}", "\n\n", result)
 
     @staticmethod
     def _prepare(value: str, fmt: TemplateFormat) -> str:

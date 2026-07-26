@@ -27,7 +27,7 @@ class LocalProvider(BaseAIProvider):
         # Local endpoints usually ignore the key, but the SDK requires a value.
         return AsyncOpenAI(
             api_key=self.api_key or "local",
-            base_url=settings.local_llm_base_url,
+            base_url=self.base_url or settings.local_llm_base_url,
         )
 
     @retry(

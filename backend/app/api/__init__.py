@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from backend.app.api import (
+    ads,
     ai,
     auth,
     channels,
@@ -32,6 +33,7 @@ api_router.include_router(templates.router, prefix="/templates", tags=["template
 api_router.include_router(watermarks.router, prefix="/watermarks", tags=["watermarks"])
 api_router.include_router(ai.router, prefix="/ai", tags=["ai"])
 api_router.include_router(channels.router, prefix="/channels", tags=["channels"])
+api_router.include_router(ads.router, prefix="/ads", tags=["ads"])
 api_router.include_router(settings_router.router, prefix="/settings", tags=["settings"])
 api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
 

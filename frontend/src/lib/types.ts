@@ -23,7 +23,15 @@ export interface Source {
   parser_engine: string;
   priority: number;
   check_interval_seconds: number;
+  timeout_seconds?: number;
   is_active: boolean;
+  use_proxy?: boolean;
+  proxy_url?: string | null;
+  headers?: Record<string, unknown>;
+  cookies?: Record<string, unknown>;
+  auth?: Record<string, unknown>;
+  selectors?: Record<string, unknown>;
+  city_ids?: number[];
   last_checked_at?: string;
   last_error?: string;
   error_count: number;
@@ -39,6 +47,8 @@ export interface NewsItem {
   source_id?: number;
   match_score?: number;
   is_spoiler: boolean;
+  author_name?: string | null;
+  submitted_anonymously?: boolean;
   scheduled_at?: string;
   published_at?: string;
   created_at: string;
@@ -54,6 +64,12 @@ export interface DashboardStats {
   total_cities: number;
   active_sources: number;
   total_sources: number;
+  total_channels: number;
+  active_channels: number;
+  channels_by_city: { city: string; count: number }[];
+  bot_submissions: number;
+  bot_unique_users: number;
+  bot_anonymous: number;
   by_status: { status: string; count: number }[];
   last_7_days: { date: string; count: number }[];
 }

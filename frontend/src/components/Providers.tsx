@@ -1,0 +1,13 @@
+"use client";
+
+import type { ReactNode } from "react";
+import { ThemeProvider } from "next-themes";
+
+/** Client-side providers (theme, etc.) rendered inside <body>. */
+export function Providers({ children }: { children: ReactNode }) {
+  return (
+    <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
+      {children}
+    </ThemeProvider>
+  );
+}

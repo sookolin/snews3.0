@@ -31,14 +31,18 @@ COPY alembic.ini ./alembic.ini
 
 RUN pip install --upgrade pip && pip install -e .
 
-# Playwright browser (for JS-heavy website parsing). Chromium only.
-RUN python -m playwright install --with-deps chromium || true
+# Playwright browser (for JS-heavy website parsing). Installed to a shared path
+# so the non-root runtime user can find it.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN mkdir -p /ms-playwright \
+    && python -m playwright install --with-deps chromium \
+    && chmod -R a+rx /ms-playwright
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 RUN useradd -m -u 1000 appuser && mkdir -p /data/media /data/backups \
-    && chown -R appuser:appuser /app /data
+    && chown -R appuser:appuser /app /data /ms-playwright
 USER appuser
 
 EXPOSE 8000

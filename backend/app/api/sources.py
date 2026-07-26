@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from backend.app.deps import ClientMeta, DBSession, require_permission
 from shared.enums import Permission
@@ -18,11 +19,21 @@ from shared.services.crud import CRUDService
 router = APIRouter()
 
 
-async def _attach_cities(session: DBSession, source: Source, city_ids: list[int]) -> None:
-    cities = (
-        (await session.scalars(select(City).where(City.id.in_(city_ids)))).all() if city_ids else []
-    )
-    source.cities = list(cities)
+async def _set_source_cities(session: DBSession, source_id: int, city_ids: list[int]) -> None:
+    """Replace a source's city links via the association table (no lazy load)."""
+    from sqlalchemy import delete, insert
+
+    from shared.models.source import source_cities
+
+    await session.execute(delete(source_cities).where(source_cities.c.source_id == source_id))
+    if city_ids:
+        # Keep only existing cities to satisfy FK.
+        valid = (await session.scalars(select(City.id).where(City.id.in_(city_ids)))).all()
+        if valid:
+            await session.execute(
+                insert(source_cities),
+                [{"source_id": source_id, "city_id": cid} for cid in valid],
+            )
 
 
 @router.get("", response_model=Page[SourceOut])
@@ -46,8 +57,7 @@ async def create_source(
     source = Source(**data)
     session.add(source)
     await session.flush()
-    await _attach_cities(session, source, payload.city_ids)
-    await session.flush()
+    await _set_source_cities(session, source.id, payload.city_ids)
     await AuditService(session).log(
         "source.create",
         user_id=actor.id,
@@ -56,7 +66,12 @@ async def create_source(
         entity_id=source.id,
         **meta,
     )
-    return SourceOut.model_validate(source)
+    await session.commit()
+    # Re-fetch with the relationship eagerly loaded for safe serialization.
+    fresh = await session.scalar(
+        select(Source).options(selectinload(Source.cities)).where(Source.id == source.id)
+    )
+    return SourceOut.model_validate(fresh)
 
 
 @router.get("/{source_id}", response_model=SourceOut)
@@ -65,7 +80,13 @@ async def get_source(
     session: DBSession,
     _: User = Depends(require_permission(Permission.SOURCE_VIEW)),
 ) -> SourceOut:
-    source = await CRUDService(session, Source).get_or_404(source_id)
+    source = await session.scalar(
+        select(Source).options(selectinload(Source.cities)).where(Source.id == source_id)
+    )
+    if source is None:
+        from shared.exceptions import NotFoundError
+
+        raise NotFoundError(f"Source {source_id} not found")
     return SourceOut.model_validate(source)
 
 
@@ -83,9 +104,9 @@ async def update_source(
     city_ids = data.pop("city_ids", None)
     for key, value in data.items():
         setattr(source, key, value)
-    if city_ids is not None:
-        await _attach_cities(session, source, city_ids)
     await session.flush()
+    if city_ids is not None:
+        await _set_source_cities(session, source_id, city_ids)
     await AuditService(session).log(
         "source.update",
         user_id=actor.id,
@@ -95,7 +116,11 @@ async def update_source(
         changes=data,
         **meta,
     )
-    return SourceOut.model_validate(source)
+    await session.commit()
+    fresh = await session.scalar(
+        select(Source).options(selectinload(Source.cities)).where(Source.id == source_id)
+    )
+    return SourceOut.model_validate(fresh)
 
 
 @router.delete("/{source_id}", response_model=Message)

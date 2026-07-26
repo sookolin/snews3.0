@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 
 from backend.app.deps import DBSession, require_permission
-from shared.enums import NewsStatus, Permission
+from shared.enums import NewsOrigin, NewsStatus, Permission
+from shared.models.channel import Channel
 from shared.models.city import City
 from shared.models.news import News
 from shared.models.source import Source
@@ -48,6 +49,45 @@ async def dashboard_stats(
         )
         or 0
     )
+    total_channels = await session.scalar(select(func.count()).select_from(Channel)) or 0
+    active_channels = (
+        await session.scalar(
+            select(func.count()).select_from(Channel).where(Channel.is_active.is_(True))
+        )
+        or 0
+    )
+    channels_by_city_rows = (
+        await session.execute(
+            select(City.name, func.count(Channel.id))
+            .join(Channel, Channel.city_id == City.id, isouter=True)
+            .group_by(City.id, City.name)
+        )
+    ).all()
+    channels_by_city = [{"city": name, "count": count} for name, count in channels_by_city_rows]
+
+    # Bot usage statistics (news submitted by Telegram users).
+    bot_submissions = (
+        await session.scalar(
+            select(func.count()).select_from(News).where(News.origin == NewsOrigin.USER)
+        )
+        or 0
+    )
+    bot_unique_users = (
+        await session.scalar(
+            select(func.count(func.distinct(News.submitted_by_telegram_id))).where(
+                News.submitted_by_telegram_id.is_not(None)
+            )
+        )
+        or 0
+    )
+    bot_anonymous = (
+        await session.scalar(
+            select(func.count())
+            .select_from(News)
+            .where(News.submitted_anonymously.is_(True))
+        )
+        or 0
+    )
 
     by_status_rows = (
         await session.execute(select(News.status, func.count()).group_by(News.status))
@@ -76,6 +116,12 @@ async def dashboard_stats(
         total_cities=total_cities,
         active_sources=active_sources,
         total_sources=total_sources,
+        total_channels=total_channels,
+        active_channels=active_channels,
+        channels_by_city=channels_by_city,
+        bot_submissions=bot_submissions,
+        bot_unique_users=bot_unique_users,
+        bot_anonymous=bot_anonymous,
         by_status=by_status,
         last_7_days=last_7,
     )

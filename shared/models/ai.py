@@ -34,6 +34,13 @@ class AIProfile(Base, TimestampMixin):
     )
     model: Mapped[str | None] = mapped_column(String(128))
 
+    # Fully DB-configurable credentials (no .env needed).
+    api_key: Mapped[str | None] = mapped_column(String(512))
+    # Custom base URL / endpoint (OpenAI-compatible, Gemini proxy, local LLM…).
+    base_url: Mapped[str | None] = mapped_column(String(512))
+    # Embedding model name (optional; provider-specific default otherwise).
+    embedding_model: Mapped[str | None] = mapped_column(String(128))
+
     system_prompt: Mapped[str] = mapped_column(Text, default=DEFAULT_SYSTEM_PROMPT, nullable=False)
     # Extra instructions appended to system prompt (tone, style…)
     instructions: Mapped[str | None] = mapped_column(Text)

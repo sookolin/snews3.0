@@ -5,30 +5,31 @@ import useSWR from "swr";
 import { api, fetcher } from "@/lib/api";
 import type { Page, Source } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
+import { Modal, Field } from "@/components/Modal";
 
 const TYPES = ["rss", "telegram", "website", "html", "api"];
+const ENGINES = ["auto", "beautifulsoup", "lxml", "playwright"];
 
 export default function SourcesPage() {
   const { data, mutate } = useSWR<Page<Source>>("/sources?size=100", fetcher);
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", url: "", type: "rss", check_interval_seconds: 300 });
+  const [form, setForm] = useState<Partial<Source> | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const create = async () => {
+  const openNew = () => setForm({ name: "", url: "", type: "rss", parser_engine: "auto", check_interval_seconds: 300, is_active: true });
+  const openEdit = (s: Source) => setForm({ ...s });
+  const upd = (patch: Partial<Source>) => setForm((f) => ({ ...f!, ...patch }));
+
+  const save = async () => {
+    if (!form) return;
     setError(null);
     try {
-      await api("/sources", { method: "POST", body: JSON.stringify(form) });
-      setForm({ name: "", url: "", type: "rss", check_interval_seconds: 300 });
-      setOpen(false);
+      if (form.id) await api(`/sources/${form.id}`, { method: "PATCH", body: JSON.stringify(form) });
+      else await api("/sources", { method: "POST", body: JSON.stringify(form) });
+      setForm(null);
       mutate();
     } catch (e) {
       setError((e as Error).message);
     }
-  };
-
-  const check = async (id: number) => {
-    await api(`/sources/${id}/check`, { method: "POST" });
-    alert("Проверка источника поставлена в очередь");
   };
 
   const remove = async (id: number) => {
@@ -37,33 +38,62 @@ export default function SourcesPage() {
     mutate();
   };
 
+  const check = async (id: number) => {
+    await api(`/sources/${id}/check`, { method: "POST" });
+    alert("Проверка источника поставлена в очередь");
+  };
+
   return (
     <div>
       <PageHeader
         title="Источники"
-        action={<button className="btn-primary" onClick={() => setOpen(!open)}>Добавить источник</button>}
+        action={<button className="btn-primary" onClick={openNew}>Добавить источник</button>}
       />
 
-      {open && (
-        <div className="card mb-5 space-y-3 p-5">
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          <input className="input" placeholder="Название" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          <input className="input" placeholder="URL" value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} />
-          <div className="flex gap-3">
-            <select className="input max-w-[160px]" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-              {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-            <input
-              type="number"
-              className="input max-w-[200px]"
-              placeholder="Интервал, сек"
-              value={form.check_interval_seconds}
-              onChange={(e) => setForm({ ...form, check_interval_seconds: Number(e.target.value) })}
-            />
+      <Modal open={!!form} onClose={() => setForm(null)} title={form?.id ? "Редактировать источник" : "Новый источник"} wide>
+        {form && (
+          <div className="space-y-4">
+            {error && <p className="rounded-md bg-red-50 p-2 text-sm text-red-600">{error}</p>}
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Название"><input className="input" value={form.name ?? ""} onChange={(e) => upd({ name: e.target.value })} /></Field>
+              <Field label="Тип">
+                <select className="input" value={form.type} onChange={(e) => upd({ type: e.target.value })}>
+                  {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </Field>
+            </div>
+            <Field label="URL"><input className="input" value={form.url ?? ""} onChange={(e) => upd({ url: e.target.value })} /></Field>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Парсер">
+                <select className="input" value={form.parser_engine} onChange={(e) => upd({ parser_engine: e.target.value })}>
+                  {ENGINES.map((e) => <option key={e} value={e}>{e}</option>)}
+                </select>
+              </Field>
+              <Field label="Интервал проверки (сек)"><input type="number" className="input" value={form.check_interval_seconds ?? 300} onChange={(e) => upd({ check_interval_seconds: Number(e.target.value) })} /></Field>
+            </div>
+            <Field label="Приоритет"><input type="number" className="input" value={form.priority ?? 100} onChange={(e) => upd({ priority: Number(e.target.value) })} /></Field>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Использовать прокси">
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={!!form.use_proxy} onChange={(e) => upd({ use_proxy: e.target.checked })} />
+                  Да
+                </label>
+              </Field>
+              <Field label="URL прокси"><input className="input" value={form.proxy_url ?? ""} onChange={(e) => upd({ proxy_url: e.target.value })} /></Field>
+            </div>
+            <Field label="Заголовки (JSON)"><textarea className="input min-h-[80px]" value={JSON.stringify(form.headers ?? {}, null, 2)} onChange={(e) => { try { upd({ headers: JSON.parse(e.target.value) }); } catch {} }} /></Field>
+            <Field label="Cookies (JSON)"><textarea className="input min-h-[80px]" value={JSON.stringify(form.cookies ?? {}, null, 2)} onChange={(e) => { try { upd({ cookies: JSON.parse(e.target.value) }); } catch {} }} /></Field>
+            <Field label="Auth (JSON)"><textarea className="input min-h-[80px]" value={JSON.stringify(form.auth ?? {}, null, 2)} onChange={(e) => { try { upd({ auth: JSON.parse(e.target.value) }); } catch {} }} /></Field>
+            <Field label="Селекторы (JSON)"><textarea className="input min-h-[80px]" value={JSON.stringify(form.selectors ?? {}, null, 2)} onChange={(e) => { try { upd({ selectors: JSON.parse(e.target.value) }); } catch {} }} /></Field>
+            <div className="flex gap-6">
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_active ?? true} onChange={(e) => upd({ is_active: e.target.checked })} /> Активен</label>
+            </div>
+            <div className="flex justify-end border-t border-border pt-4">
+              <button className="btn-primary" onClick={save}>Сохранить</button>
+            </div>
           </div>
-          <button className="btn-primary" onClick={create}>Создать</button>
-        </div>
-      )}
+        )}
+      </Modal>
 
       <div className="card overflow-hidden">
         <table className="w-full text-sm">
@@ -88,6 +118,7 @@ export default function SourcesPage() {
                 <td className="px-4 py-3">{s.error_count > 0 ? <span className="text-red-600">{s.error_count}</span> : "0"}</td>
                 <td className="px-4 py-3">
                   <div className="flex justify-end gap-2">
+                    <button className="btn-outline py-1" onClick={() => openEdit(s)}>Редактировать</button>
                     <button className="btn-outline py-1" onClick={() => check(s.id)}>Проверить</button>
                     <button className="btn-danger py-1" onClick={() => remove(s.id)}>Удалить</button>
                   </div>

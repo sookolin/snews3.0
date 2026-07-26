@@ -14,6 +14,7 @@ from shared.plugins.ai.base import BaseAIProvider
 
 
 def _api_key_for(provider: AIProviderType) -> str:
+    """Fallback API key from .env (used only when the profile has none set)."""
     return {
         AIProviderType.ANTHROPIC: settings.anthropic_api_key,
         AIProviderType.OPENAI: settings.openai_api_key,
@@ -59,7 +60,9 @@ class AIService:
     def _build_provider(self, profile: AIProfile) -> BaseAIProvider:
         provider_cls = ai_registry.get(profile.provider.value)
         model = profile.model or _default_model_for(profile.provider)
-        return provider_cls(profile, _api_key_for(profile.provider), model)
+        # Prefer credentials stored on the profile (DB), fall back to .env.
+        api_key = (profile.api_key or "").strip() or _api_key_for(profile.provider)
+        return provider_cls(profile, api_key, model)
 
     async def process(
         self, title: str | None, text: str, profile_id: int | None = None

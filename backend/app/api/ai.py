@@ -45,7 +45,7 @@ async def list_profiles(
     _: User = Depends(require_permission(Permission.AI_MANAGE)),
 ) -> Page[AIProfileOut]:
     items, total = await CRUDService(session, AIProfile).list(params.offset, params.size)
-    return Page.create([AIProfileOut.model_validate(a) for a in items], total, params)
+    return Page.create([AIProfileOut.from_model(a) for a in items], total, params)
 
 
 @router.post("", response_model=AIProfileOut, status_code=201)
@@ -58,7 +58,7 @@ async def create_profile(
     if payload.is_default:
         await service.clear_default()
     obj = await service.create(payload)
-    return AIProfileOut.model_validate(obj)
+    return AIProfileOut.from_model(obj)
 
 
 @router.patch("/{profile_id}", response_model=AIProfileOut)
@@ -71,8 +71,12 @@ async def update_profile(
     service = CRUDService(session, AIProfile)
     if payload.is_default:
         await service.clear_default()
-    obj = await service.update(profile_id, payload)
-    return AIProfileOut.model_validate(obj)
+    data = payload.model_dump(exclude_unset=True)
+    # Empty api_key means "keep existing" — don't overwrite the stored secret.
+    if "api_key" in data and not (data["api_key"] or "").strip():
+        data.pop("api_key")
+    obj = await service.update(profile_id, data)
+    return AIProfileOut.from_model(obj)
 
 
 @router.delete("/{profile_id}", response_model=Message)

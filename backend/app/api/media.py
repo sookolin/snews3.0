@@ -27,6 +27,36 @@ class ReorderRequest(BaseModel):
     ordered_ids: list[int]
 
 
+class FromUrlRequest(BaseModel):
+    news_id: int
+    url: str
+    caption: str | None = None
+
+
+@router.post("/from-url", response_model=MediaOut, status_code=201)
+async def add_media_from_url(
+    payload: FromUrlRequest,
+    session: DBSession,
+    _: User = Depends(require_permission(Permission.NEWS_EDIT)),
+) -> MediaOut:
+    """Attach a remote media URL to a news item (used by manual compose)."""
+    news = await session.get(News, payload.news_id)
+    if news is None:
+        raise NotFoundError(f"News {payload.news_id} not found")
+    media_type = MediaService.guess_type(None, payload.url)
+    position = len(news.media) if news.media else 0
+    asset = MediaAsset(
+        news_id=payload.news_id,
+        type=media_type,
+        remote_url=payload.url,
+        caption=payload.caption,
+        position=position,
+    )
+    session.add(asset)
+    await session.flush()
+    return MediaOut.model_validate(asset)
+
+
 @router.post("/upload", response_model=MediaOut, status_code=201)
 async def upload_media(
     session: DBSession,

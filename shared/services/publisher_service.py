@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from shared.enums import NewsStatus
+from shared.enums import NewsOrigin, NewsStatus
 from shared.exceptions import NotFoundError, PublishError
 from shared.logging import get_logger
 from shared.models.channel import Channel
@@ -78,6 +78,11 @@ class PublisherService:
             if source:
                 source_name = source.name
 
+        # Author: for user submissions, use the author name unless anonymous.
+        author_name = ""
+        if news.origin == NewsOrigin.USER and not news.submitted_anonymously:
+            author_name = news.author_name or ""
+
         # Process media (watermark) once.
         for asset in news.media:
             if asset.processed_path is None:
@@ -102,6 +107,7 @@ class PublisherService:
                 source=source_name,
                 source_url=source_url,
                 city=news.city.name if news.city else "",
+                author=author_name,
                 published_at=datetime.now(timezone.utc),
             )
 
@@ -113,6 +119,11 @@ class PublisherService:
                     media=list(news.media),
                     disable_web_preview=template.disable_web_preview,
                     is_spoiler=news.is_spoiler,
+                    latitude=news.latitude,
+                    longitude=news.longitude,
+                    location_title=news.location_title,
+                    location_address=news.location_address,
+                    buttons=news.buttons or [],
                 )
             )
             if result.success:

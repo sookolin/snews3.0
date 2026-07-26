@@ -25,7 +25,10 @@ class OpenAIProvider(BaseAIProvider):
             raise AIProviderError("openai package is not installed") from exc
         if not self.api_key:
             raise AIProviderError("OpenAI API key is not configured")
-        return AsyncOpenAI(api_key=self.api_key)
+        kwargs: dict = {"api_key": self.api_key}
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
+        return AsyncOpenAI(**kwargs)
 
     @retry(
         stop=stop_after_attempt(3),
@@ -55,7 +58,7 @@ class OpenAIProvider(BaseAIProvider):
         client = self._client()
         try:
             response = await client.embeddings.create(
-                model="text-embedding-3-small",
+                model=self.embedding_model or "text-embedding-3-small",
                 input=text[:8000],
             )
             return list(response.data[0].embedding)

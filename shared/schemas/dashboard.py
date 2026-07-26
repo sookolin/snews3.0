@@ -25,6 +25,12 @@ class DashboardStats(BaseModel):
     total_cities: int
     active_sources: int
     total_sources: int
+    total_channels: int
+    active_channels: int
+    channels_by_city: list[dict] = []
+    bot_submissions: int = 0
+    bot_unique_users: int = 0
+    bot_anonymous: int = 0
     by_status: list[StatusCount]
     last_7_days: list[TimeSeriesPoint]
 

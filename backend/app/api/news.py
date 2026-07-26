@@ -77,7 +77,7 @@ async def _get_news(session: DBSession, news_id: int) -> News:
     news = await session.get(News, news_id)
     if news is None:
         raise NotFoundError(f"News {news_id} not found")
-    await session.refresh(news, attribute_names=["media"])
+    await session.refresh(news)
     return news
 
 
@@ -100,10 +100,11 @@ async def create_news(
         submitted_by_telegram_id=payload.submitted_by_telegram_id,
         submitted_anonymously=payload.submitted_anonymously,
         author_name=payload.author_name,
+        buttons=payload.buttons or [],
     )
     session.add(news)
     await session.flush()
-    await session.refresh(news, attribute_names=["media"])
+    await session.refresh(news)
     return NewsOut.model_validate(news)
 
 
@@ -145,7 +146,7 @@ async def update_news(
         changes=data,
         **meta,
     )
-    await session.refresh(news, attribute_names=["media"])
+    await session.refresh(news)
     return NewsOut.model_validate(news)
 
 
@@ -167,7 +168,7 @@ async def restore_version(
     actor: User = Depends(require_permission(Permission.NEWS_EDIT)),
 ) -> NewsOut:
     news = await VersionService(session).restore(news_id, version, edited_by=actor.id)
-    await session.refresh(news, attribute_names=["media"])
+    await session.refresh(news)
     return NewsOut.model_validate(news)
 
 
@@ -202,7 +203,7 @@ async def approve_news(
 
             publish_news.delay(news_id)
     await session.flush()
-    await session.refresh(news, attribute_names=["media"])
+    await session.refresh(news)
     return NewsOut.model_validate(news)
 
 
@@ -228,8 +229,26 @@ async def reject_news(
         changes={"reason": reason},
         **meta,
     )
-    await session.refresh(news, attribute_names=["media"])
+    await session.refresh(news)
     return NewsOut.model_validate(news)
+
+
+@router.post("/{news_id}/send-to-moderation", response_model=Message)
+async def send_to_moderation(
+    news_id: int,
+    session: DBSession,
+    _: User = Depends(require_permission(Permission.NEWS_MODERATE)),
+) -> Message:
+    """(Re)send the moderation card for this news to its city's Telegram topic."""
+    news = await _get_news(session, news_id)
+    if news.city_id is None:
+        from shared.exceptions import ValidationError
+
+        raise ValidationError("У новости не задан город")
+    from workers.tasks import notify_moderation
+
+    notify_moderation.delay(news_id)
+    return Message(detail="Карточка отправлена в топик модерации")
 
 
 @router.post("/{news_id}/publish", response_model=NewsOut)
@@ -251,7 +270,7 @@ async def publish_now(
         entity_id=news_id,
         **meta,
     )
-    await session.refresh(news, attribute_names=["media"])
+    await session.refresh(news)
     return NewsOut.model_validate(news)
 
 

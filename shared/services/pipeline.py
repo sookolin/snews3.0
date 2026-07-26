@@ -132,7 +132,20 @@ class IngestionPipeline:
     ) -> int | None:
         # 1) City matching
         match = matcher.match(item.text, item.title)
-        if match.city is None or match.score < min_score:
+        matched_city = match.city
+        match_score = match.score
+        matched_keywords = match.matched_keywords
+
+        # If the source is explicitly bound to cities, its posts belong to those
+        # cities directly — keyword matching only picks the best one, and we do
+        # not drop items that fail the keyword threshold.
+        linked_cities = list(source.cities)
+        if linked_cities:
+            if matched_city is None or match_score < min_score:
+                matched_city = linked_cities[0]
+                match_score = max(match_score, 1.0)
+                matched_keywords = matched_keywords or []
+        elif matched_city is None or match_score < min_score:
             report.unmatched += 1
             return None
 
@@ -141,7 +154,7 @@ class IngestionPipeline:
             text=item.text,
             title=item.title,
             url=item.url,
-            city_id=match.city.id,
+            city_id=matched_city.id,
         )
         if dedup_result.is_duplicate:
             report.duplicates += 1
@@ -155,12 +168,12 @@ class IngestionPipeline:
             original_url=item.url,
             status=NewsStatus.PROCESSING,
             origin=NewsOrigin.PARSER,
-            city_id=match.city.id,
+            city_id=matched_city.id,
             source_id=source.id,
             content_hash=dedup_result.content_hash,
             simhash=dedup_result.simhash,
-            match_score=match.score,
-            matched_keywords=match.matched_keywords,
+            match_score=match_score,
+            matched_keywords=matched_keywords,
         )
         self.session.add(news)
         await self.session.flush()
