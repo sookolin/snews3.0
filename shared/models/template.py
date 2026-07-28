@@ -50,5 +50,8 @@ class Template(Base, TimestampMixin):
     # Whether Telegram link previews are shown
     disable_web_preview: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    # Render the title in UPPERCASE.
+    uppercase_title: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Template {self.id} {self.name}>"

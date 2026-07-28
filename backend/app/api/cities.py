@@ -122,3 +122,19 @@ async def create_topic(
     if topic_id is not None:
         city = await service.set_topic_id(city_id, topic_id)
     return CityOut.model_validate(city)
+
+
+@router.post("/{city_id}/test-topic", response_model=Message)
+async def test_topic(
+    city_id: int,
+    session: DBSession,
+    _: User = Depends(require_permission(Permission.CITY_MANAGE)),
+) -> Message:
+    """Send a test message to the city's topic to verify the binding."""
+    city = await CityService(session).get_or_404(city_id)
+    ok, detail = await TelegramAdminService().test_topic(city)
+    if not ok:
+        from shared.exceptions import ExternalServiceError
+
+        raise ExternalServiceError(detail)
+    return Message(detail=detail)

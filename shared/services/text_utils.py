@@ -23,13 +23,18 @@ def content_hash(text: str) -> str:
 
 
 def compute_simhash(text: str) -> int:
-    """Compute a 64-bit SimHash of the text for near-duplicate detection."""
+    """Compute a SimHash for near-duplicate detection.
+
+    The library produces an unsigned 64-bit value, but PostgreSQL ``BIGINT`` is
+    signed 64-bit, so we mask to 63 bits to keep it in range. Dropping the top
+    bit is negligible for Hamming-distance near-duplicate detection.
+    """
     from simhash import Simhash
 
     tokens = normalize_text(text).split()
     if not tokens:
         return 0
-    return int(Simhash(tokens).value)
+    return int(Simhash(tokens).value) & 0x7FFFFFFFFFFFFFFF
 
 
 def hamming_distance(a: int, b: int) -> int:

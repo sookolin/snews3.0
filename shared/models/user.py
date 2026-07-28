@@ -8,6 +8,7 @@ from sqlalchemy import BigInteger, Boolean, DateTime, Enum, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from shared.database import Base, TimestampMixin
+from shared.db_types import JSONB
 from shared.enums import UserRole
 
 
@@ -33,6 +34,14 @@ class User(Base, TimestampMixin):
 
     # Telegram linkage (for bot moderation permission checks)
     telegram_id: Mapped[int | None] = mapped_column(BigInteger, unique=True, index=True)
+
+    # Linked external accounts (OAuth login)
+    yandex_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+    vk_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+
+    # Per-user permission overrides on top of the role:
+    #   {"grant": ["news:publish"], "deny": ["news:delete"]}
+    permissions: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
     # Preferences
     language: Mapped[str] = mapped_column(String(8), default="ru", nullable=False)

@@ -23,6 +23,7 @@ class TemplateBase(BaseModel):
     subscribe_link: str | None = None
     variables: dict = Field(default_factory=dict)
     disable_web_preview: bool = True
+    uppercase_title: bool = False
 
 
 class TemplateCreate(TemplateBase):
@@ -42,6 +43,7 @@ class TemplateUpdate(BaseModel):
     subscribe_link: str | None = None
     variables: dict | None = None
     disable_web_preview: bool | None = None
+    uppercase_title: bool | None = None
 
 
 class TemplateOut(ORMModel):
@@ -58,4 +60,5 @@ class TemplateOut(ORMModel):
     subscribe_link: str | None
     variables: dict
     disable_web_preview: bool
+    uppercase_title: bool
     created_at: datetime

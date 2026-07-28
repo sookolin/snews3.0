@@ -9,12 +9,15 @@ export function Modal({
   title,
   children,
   wide = false,
+  size,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
   wide?: boolean;
+  /** Explicit width; overrides ``wide``. */
+  size?: "md" | "lg" | "xl";
 }) {
   if (!open) return null;
   return (
@@ -26,7 +29,9 @@ export function Modal({
       }}
     >
       <div
-        className={`card my-8 w-full ${wide ? "max-w-3xl" : "max-w-lg"} p-6`}
+        className={`card my-8 w-full ${
+          size === "xl" ? "max-w-6xl" : size === "lg" || wide ? "max-w-4xl" : "max-w-lg"
+        } p-6`}
         onMouseDown={(e) => e.stopPropagation()}
         onMouseUp={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}

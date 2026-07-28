@@ -15,7 +15,11 @@ export interface PreviewMedia {
 export interface TelegramPreviewProps {
   channelName?: string;
   channelAvatar?: string | null;
+  /** Optional separate title (when not using a pre-rendered template body). */
   title?: string;
+  /** Emoji accent shown before the title. */
+  emoji?: string | null;
+  /** Body text; may contain Telegram HTML which is rendered as markup. */
   text?: string;
   media?: PreviewMedia[];
   buttons?: PreviewButton[][];
@@ -26,20 +30,26 @@ export interface TelegramPreviewProps {
 const REACTIONS = ["❤️", "🔥", "👍", "🎉"];
 
 const BTN_COLOR: Record<string, string> = {
-  primary: "bg-blue-600 text-white",
-  success: "bg-green-600 text-white",
-  danger: "bg-red-600 text-white",
-  // legacy aliases
-  blue: "bg-blue-600 text-white",
-  green: "bg-green-600 text-white",
-  red: "bg-red-600 text-white",
+  primary: "bg-blue-600 !text-white",
+  success: "bg-green-600 !text-white",
+  danger: "bg-red-600 !text-white",
+  blue: "bg-blue-600 !text-white",
+  green: "bg-green-600 !text-white",
+  red: "bg-red-600 !text-white",
 };
 
-/** iOS-style Telegram channel message preview. */
+/**
+ * iOS-style Telegram channel post preview.
+ *
+ * ``text`` may already be the fully rendered template output (HTML). Telegram
+ * markup (<b>, <i>, <u>, <s>, <a>, <code>, spoilers) is rendered as real
+ * formatting, and <br> is treated as a line break.
+ */
 export function TelegramPreview({
   channelName = "Канал",
   channelAvatar,
   title,
+  emoji,
   text,
   media = [],
   buttons = [],
@@ -50,27 +60,30 @@ export function TelegramPreview({
   const initial = channelName.trim().charAt(0).toUpperCase() || "S";
   const time = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 
+  // Normalise <br> to newlines so whitespace-pre-wrap shows real line breaks.
+  const body = (text ?? "").replace(/<br\s*\/?>/gi, "\n");
+
   return (
     <div className="ios-tg">
-      {/* iOS status bar + nav header */}
+      {/* iOS navigation bar: channel avatar + name */}
       <div className="ios-tg-nav">
         <div className="ios-tg-back">‹ Назад</div>
         <div className="ios-tg-navtitle">
+          <div className="text-right leading-tight">
+            <div className="text-[15px] font-semibold">{channelName}</div>
+            <div className="text-[12px] text-white/45">канал</div>
+          </div>
           <div
             className="ios-tg-navavatar"
             style={channelAvatar ? { backgroundImage: `url(${channelAvatar})` } : undefined}
           >
             {!channelAvatar && initial}
           </div>
-          <div className="leading-tight text-center">
-            <div className="text-[13px] font-semibold">{channelName}</div>
-            <div className="text-[11px] text-black/40 dark:text-white/40">канал</div>
-          </div>
         </div>
-        <div className="w-12" />
+        <div className="w-14" />
       </div>
 
-      {/* Chat area */}
+      {/* Chat area with the channel post */}
       <div className="ios-tg-chat">
         <div className="ios-tg-bubble">
           {enabledMedia.length > 0 && (
@@ -93,22 +106,24 @@ export function TelegramPreview({
           )}
 
           <div className="ios-tg-body">
-            {title && <div className="ios-tg-title">{title}</div>}
-            {text && (
-              <div className="ios-tg-text" dangerouslySetInnerHTML={{ __html: text }} />
+            {title && (
+              <div className="ios-tg-title">
+                {emoji ? `${emoji} ` : ""}
+                {title}
+              </div>
             )}
+            {body && <div className="ios-tg-text" dangerouslySetInnerHTML={{ __html: body }} />}
             {locationTitle && (
               <div className="ios-tg-loc">
                 <span>📍</span> {locationTitle}
               </div>
             )}
             <div className="ios-tg-meta">
-              {views > 0 && <span className="ios-tg-views">👁 {views}</span>}
-              <span className="ios-tg-time">{time}</span>
+              <span>👁 {views}</span>
+              <span>{time}</span>
             </div>
           </div>
 
-          {/* reactions */}
           <div className="ios-tg-reactions">
             {REACTIONS.map((r) => (
               <span key={r} className="ios-tg-reaction">
@@ -119,7 +134,6 @@ export function TelegramPreview({
           </div>
         </div>
 
-        {/* inline buttons (below bubble) */}
         {buttons.length > 0 && (
           <div className="ios-tg-buttons">
             {buttons.map((row, i) => (
@@ -138,7 +152,6 @@ export function TelegramPreview({
         )}
       </div>
 
-      {/* comments bar */}
       <div className="ios-tg-comments">💬 Прокомментировать</div>
     </div>
   );

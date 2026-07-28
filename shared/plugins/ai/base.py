@@ -16,6 +16,7 @@ class AIResult:
 
     title: str
     text: str
+    emoji: str | None = None
     embedding: list[float] | None = None
 
 
@@ -49,12 +50,20 @@ class BaseAIProvider(abc.ABC):
             parts.append(self.profile.instructions)
         return "\n\n".join(p for p in parts if p)
 
-    @staticmethod
-    def build_user_prompt(title: str | None, text: str) -> str:
+    def build_user_prompt(self, title: str | None, text: str) -> str:
         header = f"Заголовок: {title}\n\n" if title else ""
+        want_emoji = getattr(self.profile, "auto_emoji", False)
+        emoji_rule = (
+            ' Также подбери один эмодзи, подходящий по смыслу к заголовку, и верни его '
+            'в поле "emoji".'
+            if want_emoji
+            else ""
+        )
         return (
             f"{header}Текст новости:\n{text}\n\n"
-            'Верни строго JSON вида {"title": "...", "text": "..."} без пояснений.'
+            "Требования: заголовок верни обычным текстом БЕЗ HTML-тегов и без эмодзи в начале. "
+            "В тексте можно использовать теги <b>, <i>, <a>." + emoji_rule + "\n"
+            'Верни строго JSON вида {"title": "...", "text": "...", "emoji": "..."} без пояснений.'
         )
 
     @staticmethod
@@ -71,9 +80,11 @@ class BaseAIProvider(abc.ABC):
             cleaned = cleaned[start : end + 1]
         try:
             data = json.loads(cleaned)
+            emoji = str(data.get("emoji") or "").strip() or None
             return AIResult(
                 title=str(data.get("title") or fallback_title or "").strip(),
                 text=str(data.get("text") or fallback_text).strip(),
+                emoji=emoji,
             )
         except (json.JSONDecodeError, AttributeError):
             # Model returned plain text — use it as the body.

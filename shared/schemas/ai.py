@@ -26,6 +26,7 @@ class AIProfileBase(BaseModel):
     temperature: float = Field(default=0.4, ge=0.0, le=2.0)
     max_tokens: int = Field(default=2048, ge=64, le=32000)
     generate_embeddings: bool = True
+    auto_emoji: bool = True
 
 
 class AIProfileCreate(AIProfileBase):
@@ -48,6 +49,7 @@ class AIProfileUpdate(BaseModel):
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, ge=64, le=32000)
     generate_embeddings: bool | None = None
+    auto_emoji: bool | None = None
 
 
 class AIProfileOut(ORMModel):
@@ -68,10 +70,11 @@ class AIProfileOut(ORMModel):
     temperature: float
     max_tokens: int
     generate_embeddings: bool
+    auto_emoji: bool
     created_at: datetime
 
     @classmethod
-    def from_model(cls, obj: object) -> "AIProfileOut":
+    def from_model(cls, obj: object) -> AIProfileOut:
         data = cls.model_validate(obj)
         data.has_api_key = bool(getattr(obj, "api_key", None))
         return data

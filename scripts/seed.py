@@ -58,7 +58,8 @@ async def seed() -> None:
                     header="🔥 <b>{title}</b>",
                     body="{text}",
                     footer=(
-                        "Источник: {source}\n————————\n"
+                        "Источник: {source}\n"
+                        "Автор: {author}\n————————\n"
                         '👉 <a href="{link}">Подписаться на новости</a>'
                     ),
                     separator="\n\n",

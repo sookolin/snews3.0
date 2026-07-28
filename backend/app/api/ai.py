@@ -22,12 +22,15 @@ class AITestRequest(BaseModel):
     title: str | None = None
     text: str
     profile_id: int | None = None
+    template_id: int | None = None
 
 
 class AITestResponse(BaseModel):
     title: str
     text: str
     provider: str
+    emoji: str | None = None
+    rendered: str | None = None
 
 
 @router.get("/providers", response_model=list[str])
@@ -95,8 +98,29 @@ async def test_ai(
     session: DBSession,
     _: User = Depends(require_permission(Permission.AI_MANAGE)),
 ) -> AITestResponse:
-    """Run an AI profile against sample text to verify configuration."""
+    """Run an AI profile against sample text; optionally render via a template."""
     result, profile = await AIService(session).process(
         payload.title, payload.text, payload.profile_id
     )
-    return AITestResponse(title=result.title, text=result.text, provider=profile.provider.value)
+    rendered = None
+    if payload.template_id:
+        from shared.models.template import Template
+        from shared.services.template_renderer import TemplateRenderer
+
+        template = await session.get(Template, payload.template_id)
+        if template:
+            rendered = TemplateRenderer().render(
+                template,
+                title=result.title,
+                text=result.text,
+                source="Пример источника",
+                city="Пример города",
+                emoji=result.emoji or "",
+            )
+    return AITestResponse(
+        title=result.title,
+        text=result.text,
+        provider=profile.provider.value,
+        emoji=result.emoji,
+        rendered=rendered,
+    )

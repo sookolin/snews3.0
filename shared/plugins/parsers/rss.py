@@ -56,23 +56,7 @@ class RSSParser(BaseParser):
             if parsed_time is not None:
                 published_at = datetime.fromtimestamp(mktime(parsed_time), tz=timezone.utc)
 
-            media: list[ParsedMedia] = []
-            for enclosure in getattr(entry, "enclosures", []) or []:
-                href = enclosure.get("href") or enclosure.get("url")
-                mime = enclosure.get("type", "")
-                if not href:
-                    continue
-                if mime.startswith("image"):
-                    media.append(ParsedMedia(type=MediaType.PHOTO, url=href))
-                elif mime.startswith("video"):
-                    media.append(ParsedMedia(type=MediaType.VIDEO, url=href))
-                elif mime.startswith("audio"):
-                    media.append(ParsedMedia(type=MediaType.AUDIO, url=href))
-
-            for media_content in getattr(entry, "media_content", []) or []:
-                url = media_content.get("url")
-                if url:
-                    media.append(ParsedMedia(type=MediaType.PHOTO, url=url))
+            media = _extract_media(entry, text)
 
             items.append(
                 ParsedItem(
@@ -94,3 +78,80 @@ def _strip_html(html: str) -> str:
     from bs4 import BeautifulSoup
 
     return BeautifulSoup(html, "lxml").get_text(" ", strip=True)
+
+
+_IMAGE_EXT = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+_VIDEO_EXT = (".mp4", ".mov", ".webm", ".m4v")
+
+
+def _kind_for(url: str, mime: str = "") -> MediaType | None:
+    """Classify a media URL by MIME type, then by file extension."""
+    mime = (mime or "").lower()
+    if mime.startswith("image"):
+        return MediaType.ANIMATION if mime.endswith("gif") else MediaType.PHOTO
+    if mime.startswith("video"):
+        return MediaType.VIDEO
+    if mime.startswith("audio"):
+        return MediaType.AUDIO
+
+    lowered = url.lower().split("?")[0]
+    if lowered.endswith(".gif"):
+        return MediaType.ANIMATION
+    if lowered.endswith(_IMAGE_EXT):
+        return MediaType.PHOTO
+    if lowered.endswith(_VIDEO_EXT):
+        return MediaType.VIDEO
+    return None
+
+
+def _extract_media(entry: object, description_html: str) -> list[ParsedMedia]:
+    """Collect media from every common RSS/Atom convention.
+
+    Feeds advertise images in wildly different ways, so we check, in order:
+    ``enclosures``, ``media_content``, ``media_thumbnail``, ``links`` with an
+    image MIME, and finally ``<img>`` tags inside the description HTML.
+    """
+    media: list[ParsedMedia] = []
+    seen: set[str] = set()
+
+    def add(url: str | None, mime: str = "", *, assume_image: bool = False) -> None:
+        if not url or url in seen:
+            return
+        if not url.startswith(("http://", "https://")):
+            return
+        kind = _kind_for(url, mime)
+        if kind is None and assume_image:
+            kind = MediaType.PHOTO
+        if kind is None:
+            return
+        seen.add(url)
+        media.append(ParsedMedia(type=kind, url=url))
+
+    for enclosure in getattr(entry, "enclosures", None) or []:
+        add(enclosure.get("href") or enclosure.get("url"), enclosure.get("type", ""))
+
+    # <media:content> — usually carries an explicit medium/type.
+    for content in getattr(entry, "media_content", None) or []:
+        add(content.get("url"), content.get("type", ""), assume_image=True)
+
+    # <media:thumbnail> — always an image, often without a MIME type.
+    for thumb in getattr(entry, "media_thumbnail", None) or []:
+        add(thumb.get("url"), assume_image=True)
+
+    # Atom <link rel="enclosure" type="image/...">.
+    for link in getattr(entry, "links", None) or []:
+        if link.get("rel") == "enclosure":
+            add(link.get("href"), link.get("type", ""))
+
+    # Fall back to images embedded in the description/content HTML.
+    if not media and description_html:
+        try:
+            from bs4 import BeautifulSoup
+
+            soup = BeautifulSoup(description_html, "lxml")
+            for img in soup.find_all("img"):
+                add(img.get("src") or img.get("data-src"), assume_image=True)
+        except Exception:  # noqa: BLE001 - media is best-effort
+            pass
+
+    return media

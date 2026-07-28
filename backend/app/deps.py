@@ -20,7 +20,7 @@ from shared.exceptions import (
 )
 from shared.models.user import User
 from shared.redis_client import get_redis
-from shared.security import decode_token, has_permission
+from shared.security import decode_token, user_has_permission
 
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl=f"{settings.api_v1_prefix}/auth/login", auto_error=False
@@ -62,7 +62,7 @@ def require_permission(
     """Return a dependency that enforces ``permission`` for the current user."""
 
     async def _guard(user: CurrentUser) -> User:
-        if not has_permission(user.role, permission):
+        if not user_has_permission(user, permission):
             raise PermissionDeniedError(
                 f"Missing permission: {permission.value}", code="permission_denied"
             )

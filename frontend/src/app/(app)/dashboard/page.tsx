@@ -3,10 +3,14 @@
 import useSWR from "swr";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  AreaChart, Area, PieChart, Pie, Cell, Legend,
 } from "recharts";
+
+const PIE_COLORS = ["#6366f1", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#94a3b8"];
 import { fetcher } from "@/lib/api";
 import type { DashboardStats } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
+import { STATUS_LABELS } from "@/components/StatusBadge";
 
 function StatCard({ label, value, tone }: { label: string; value: number; tone?: string }) {
   return (
@@ -28,7 +32,7 @@ export default function DashboardPage() {
 
   return (
     <div>
-      <PageHeader title="Dashboard" />
+      <PageHeader title="Дашборд" />
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4 mb-6">
         <StatCard label="Всего новостей" value={data.total_news} />
         <StatCard label="Опубликовано" value={data.published} tone="text-green-600" />
@@ -37,7 +41,7 @@ export default function DashboardPage() {
         <StatCard label="Города" value={data.total_cities} />
         <StatCard label="Активные источники" value={data.active_sources} />
         <StatCard label="Всего источников" value={data.total_sources} />
-        <StatCard label="Дубликаты" value={data.duplicates} />
+        <StatCard label="Отклонено" value={data.rejected} />
         <StatCard label="Всего каналов" value={data.total_channels} />
         <StatCard label="Активные каналы" value={data.active_channels} tone="text-blue-600" />
       </div>
@@ -65,12 +69,70 @@ export default function DashboardPage() {
           <h2 className="mb-4 text-lg font-medium">Новости за 7 дней</h2>
           <div className="h-72 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={data.last_7_days}>
+              <AreaChart data={data.last_7_days}>
+                <defs>
+                  <linearGradient id="gradNews" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#6366f1" stopOpacity={0.7} />
+                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0.05} />
+                  </linearGradient>
+                </defs>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="date" fontSize={12} />
                 <YAxis allowDecimals={false} fontSize={12} />
                 <Tooltip />
-                <Bar dataKey="count" fill="hsl(222 47% 31%)" radius={[4, 4, 0, 0]} />
+                <Area type="monotone" dataKey="count" stroke="#6366f1" strokeWidth={2} fill="url(#gradNews)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="card p-5">
+          <h2 className="mb-4 text-lg font-medium">Распределение по статусам</h2>
+          <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  // Statuses come from the API as raw keys; label them in Russian.
+                  data={data.by_status.map((s) => ({
+                    ...s,
+                    status: STATUS_LABELS[s.status] ?? s.status,
+                  }))}
+                  dataKey="count"
+                  nameKey="status"
+                  innerRadius={55}
+                  outerRadius={95}
+                  paddingAngle={2}
+                >
+                  {data.by_status.map((_, i) => (
+                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="card p-5">
+          <h2 className="mb-4 text-lg font-medium">Воронка обработки</h2>
+          <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                layout="vertical"
+                data={[
+                  { name: "Найдено", value: data.total_news },
+                  { name: "На модерации", value: data.pending },
+                  { name: "Опубликовано", value: data.published },
+                  { name: "Отклонено", value: data.rejected },
+                  { name: "Ошибки", value: data.failed },
+                ]}
+              >
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                <XAxis type="number" allowDecimals={false} fontSize={12} />
+                <YAxis type="category" dataKey="name" width={110} fontSize={12} />
+                <Tooltip />
+                <Bar dataKey="value" fill="#6366f1" radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>

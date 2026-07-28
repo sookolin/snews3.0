@@ -4,6 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import { api, fetcher } from "@/lib/api";
 import type { Page } from "@/lib/types";
+import { Pencil, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal, Field } from "@/components/Modal";
 
@@ -93,7 +94,9 @@ export default function WatermarksPage() {
           <div key={w.id} className="card p-5">
             <div className="flex items-center justify-between">
               <h3 className="font-medium">{w.name}</h3>
-              {w.is_default && <span className="badge bg-emerald-100 text-emerald-700">default</span>}
+              {w.is_default && (
+                <span className="badge bg-emerald-100 text-emerald-700">по умолчанию</span>
+              )}
             </div>
             <dl className="mt-3 space-y-1 text-sm text-muted-foreground">
               <div>Текст: {w.text || "—"}</div>
@@ -103,8 +106,12 @@ export default function WatermarksPage() {
               <div>Логотип: {w.logo_path ? "загружен" : "нет"}</div>
             </dl>
             <div className="mt-3 flex gap-2">
-              <button className="btn-outline py-1" onClick={() => openEdit(w)}>Редактировать</button>
-              <button className="btn-danger py-1" onClick={() => remove(w.id)}>Удалить</button>
+              <button className="btn-icon" title="Редактировать" onClick={() => openEdit(w)}>
+                <Pencil className="h-4 w-4" />
+              </button>
+              <button className="btn-icon-danger" title="Удалить" onClick={() => remove(w.id)}>
+                <Trash2 className="h-4 w-4" />
+              </button>
             </div>
           </div>
         ))}

@@ -50,6 +50,37 @@ async def update_channel(
     return ChannelOut.model_validate(obj)
 
 
+@router.post("/{channel_id}/sync", response_model=ChannelOut)
+async def sync_channel(
+    channel_id: int,
+    session: DBSession,
+    _: User = Depends(require_permission(Permission.CHANNEL_MANAGE)),
+) -> ChannelOut:
+    """Pull the real title, @username and avatar from the Telegram channel.
+
+    The bot must be a member/admin of the chat. Previews then show the actual
+    channel identity instead of values typed by hand.
+    """
+    from shared.exceptions import ExternalServiceError
+    from shared.services.telegram_admin import TelegramAdminService
+
+    service = CRUDService(session, Channel)
+    channel = await service.get_or_404(channel_id)
+    info = await TelegramAdminService().fetch_chat_info(channel.chat_id)
+    if not info:
+        raise ExternalServiceError(
+            "Не удалось прочитать канал. Проверьте chat_id и что бот добавлен в канал."
+        )
+    if info.get("title"):
+        channel.title = info["title"]
+    if info.get("username"):
+        channel.username = info["username"]
+    if info.get("avatar_url"):
+        channel.avatar_url = info["avatar_url"]
+    await session.flush()
+    return ChannelOut.model_validate(channel)
+
+
 @router.delete("/{channel_id}", response_model=Message)
 async def delete_channel(
     channel_id: int,

@@ -30,8 +30,10 @@ CATALOG: dict[str, dict[str, str]] = {
         "moderation.source": "🔗 Источник",
         "moderation.original": "📄 Оригинал",
         "moderation.spoiler": "🙈 Спойлер",
+        "moderation.delete": "🗑 Удалить",
         "moderation.approved": "Новость одобрена.",
         "moderation.rejected": "Новость отклонена.",
+        "moderation.deleted": "Новость удалена.",
         "moderation.no_permission": "Недостаточно прав.",
     },
     "en": {
@@ -52,8 +54,10 @@ CATALOG: dict[str, dict[str, str]] = {
         "moderation.source": "🔗 Source",
         "moderation.original": "📄 Original",
         "moderation.spoiler": "🙈 Spoiler",
+        "moderation.delete": "🗑 Delete",
         "moderation.approved": "News approved.",
         "moderation.rejected": "News rejected.",
+        "moderation.deleted": "News deleted.",
         "moderation.no_permission": "Insufficient permissions.",
     },
 }

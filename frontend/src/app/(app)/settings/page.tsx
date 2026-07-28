@@ -16,6 +16,13 @@ const META: Record<string, { label: string; hint: string; group: string }> = {
     hint: "Доля совпадения (0–1) для признания дубликатом по Левенштейну. Обычно 0.9.",
     group: "Дедупликация",
   },
+  "dedup.title_similarity_threshold": {
+    label: "Порог схожести заголовков",
+    hint:
+      "Ловит одну и ту же новость с разных источников: тексты отличаются, а заголовки близки. " +
+      "Обычно 0.72; меньше — строже отсев дублей.",
+    group: "Дедупликация",
+  },
   "dedup.embedding_threshold": {
     label: "Порог косинусной близости",
     hint: "Семантическое сходство эмбеддингов (0–1) для дубликата. Обычно 0.92.",
@@ -41,15 +48,74 @@ const META: Record<string, { label: string; hint: string; group: string }> = {
     hint: "Все новости проходят ручную модерацию перед публикацией.",
     group: "Пайплайн",
   },
+  "pipeline.publish_interval_minutes": {
+    label: "Интервал между публикациями (мин)",
+    hint: "Если одобрить несколько новостей, они выйдут по очереди с этим интервалом. 0 — публиковать сразу.",
+    group: "Пайплайн",
+  },
+  "pipeline.max_item_age_minutes": {
+    label: "Максимальный возраст новости (мин)",
+    hint: "Парсить только публикации свежее этого времени — режим реального времени. 0 — брать всё.",
+    group: "Пайплайн",
+  },
+  "pipeline.keep_world_news": {
+    label: "Собирать мировые новости",
+    hint:
+      "Новости, не относящиеся ни к одному городу из админки, попадают во вкладку «Мировые». " +
+      "Выключено — такие новости отбрасываются.",
+    group: "Пайплайн",
+  },
   "notifications.email_enabled": {
     label: "Email-уведомления",
-    hint: "Включить рассылку уведомлений на email.",
+    hint: "Включить рассылку. Письма уходят на адрес из поля «Email получателя» ниже.",
+    group: "Уведомления",
+  },
+  "notifications.email_to": {
+    label: "Email получателя",
+    hint: "Именно на этот адрес приходит рассылка. Пусто — письма не отправляются.",
+    group: "Уведомления",
+  },
+  "notifications.smtp_host": {
+    label: "SMTP-сервер",
+    hint: "Например smtp.yandex.ru. Без него рассылка не работает.",
+    group: "Уведомления",
+  },
+  "notifications.smtp_port": {
+    label: "SMTP-порт",
+    hint: "Обычно 587 (STARTTLS) или 465.",
+    group: "Уведомления",
+  },
+  "notifications.smtp_user": {
+    label: "SMTP-логин",
+    hint: "Учётная запись для отправки писем.",
+    group: "Уведомления",
+  },
+  "notifications.smtp_password": {
+    label: "SMTP-пароль",
+    hint: "Пароль приложения почтового сервиса.",
+    group: "Уведомления",
+  },
+  "notifications.smtp_from": {
+    label: "Адрес отправителя",
+    hint: "Что показывается в поле «От». Пусто — берётся SMTP-логин.",
     group: "Уведомления",
   },
   "notifications.webhook_url": {
     label: "Webhook URL",
     hint: "URL для отправки событий (пусто — выключено).",
     group: "Уведомления",
+  },
+  "ui.timezone_offset_hours": {
+    label: "Часовой пояс (смещение от UTC)",
+    hint: "Во всех сообщениях модерации время показывается с этим сдвигом. Для Москвы 3.",
+    group: "Интерфейс",
+  },
+  "telegram.world_topic_id": {
+    label: "Topic ID мировых новостей",
+    hint:
+      "Отдельная ветка в группе модерации для новостей, не относящихся ни к одному городу. " +
+      "Создаётся кнопкой ниже или задаётся вручную.",
+    group: "Telegram",
   },
   "ui.default_language": {
     label: "Язык по умолчанию",
@@ -60,6 +126,11 @@ const META: Record<string, { label: string; hint: string; group: string }> = {
     label: "Favicon",
     hint: "URL иконки сайта (favicon.ico или ссылка на изображение).",
     group: "Интерфейс",
+  },
+  "bot.username": {
+    label: "Username бота",
+    hint: "Без @, например snews_robot. Нужен для быстрых ссылок «Предложить новость».",
+    group: "Telegram",
   },
 };
 
@@ -108,6 +179,18 @@ export default function SettingsPage() {
   };
 
   const hasChanges = Object.keys(dirty).some((k) => dirty[k] !== settings[k]);
+
+  /** Create the dedicated moderation topic for world news (like a city topic). */
+  const createWorldTopic = async () => {
+    setError(null);
+    try {
+      const r = await api<{ topic_id: number }>("/settings/world-topic", { method: "POST" });
+      await load();
+      alert(`Топик мировых новостей создан (ID ${r.topic_id})`);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
 
   // Group settings by their META group (fallback: "Прочее").
   const groups: Record<string, string[]> = {};
@@ -171,6 +254,16 @@ export default function SettingsPage() {
                 );
               })}
             </div>
+            {group === "Telegram" && (
+              <div className="flex items-center gap-3 border-t border-border px-4 py-3">
+                <button className="btn-outline" onClick={createWorldTopic}>
+                  Создать топик мировых новостей
+                </button>
+                <span className="text-xs text-muted-foreground">
+                  Группа модерации должна быть форумом, а бот — её администратором.
+                </span>
+              </div>
+            )}
           </div>
         ))}
       </div>

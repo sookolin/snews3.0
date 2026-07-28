@@ -13,7 +13,7 @@ News ids. The worker layer schedules it and triggers moderation notifications.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,11 +28,31 @@ from shared.plugins.parsers import parser_registry
 from shared.plugins.parsers.base import ParsedItem
 from shared.services.ai_service import AIService
 from shared.services.dedup import DedupConfig, DedupService
+from shared.services.emoji_guess import guess_emoji
 from shared.services.matcher import CityMatcher
 from shared.services.media_service import MediaService
 from shared.services.settings_service import SettingsService
 
 log = get_logger("pipeline")
+
+#: Markers that indicate a story of general (world/federal) interest, which is
+#: allowed through even when it mentions no monitored city.
+_WORLD_MARKERS = (
+    "в мире", "мировой", "мировая", "оон", "нато", "евросоюз", "еврокомиссия",
+    "сша", "китай", "индия", "турция", "германия", "франция", "великобритания",
+    "президент россии", "путин", "правительство рф", "госдума", "совфед",
+    "центробанк", "курс валют", "нефть brent", "олимпиада", "чемпионат мира",
+)
+
+
+def _looks_like_world_news(title: str | None, text: str) -> bool:
+    """Heuristically decide whether an item is world/federal news.
+
+    Used as an exception to the "must be regionally relevant" rule so that
+    genuinely important non-local stories are not silently discarded.
+    """
+    blob = f"{title or ''} {text[:600]}".lower()
+    return any(marker in blob for marker in _WORLD_MARKERS)
 
 
 @dataclass
@@ -53,12 +73,16 @@ class IngestionPipeline:
         self.session = session
         self.settings_service = SettingsService(session)
         self.media_service = MediaService(session)
+        #: Whether items matching no monitored city are kept as world news.
+        #: Loaded per run in :meth:`process_source`.
+        self._world_news_enabled = True
 
     async def _dedup_config(self) -> DedupConfig:
         cfg = await self.settings_service.get_many("dedup.")
         return DedupConfig(
             simhash_max_distance=int(cfg.get("dedup.simhash_max_distance", 3)),
             text_similarity_threshold=float(cfg.get("dedup.text_similarity_threshold", 0.9)),
+            title_similarity_threshold=float(cfg.get("dedup.title_similarity_threshold", 0.72)),
             embedding_threshold=float(cfg.get("dedup.embedding_threshold", 0.92)),
             lookback_days=int(cfg.get("dedup.lookback_days", 14)),
         )
@@ -94,7 +118,33 @@ class IngestionPipeline:
         cities = list(source.cities) if source.cities else await self._all_active_cities()
         matcher = CityMatcher(cities)
         min_score = float(await self.settings_service.get("matching.min_score", 0.3))
+        self._world_news_enabled = bool(
+            await self.settings_service.get("pipeline.keep_world_news", True)
+        )
         dedup = DedupService(self.session, await self._dedup_config())
+
+        # Real-time mode: only ingest genuinely fresh publications. Without this
+        # the first run of a feed would import its whole archive at once.
+        max_age = int(await self.settings_service.get("pipeline.max_item_age_minutes", 30))
+        if max_age > 0:
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age)
+            fresh: list[ParsedItem] = []
+            for item in items:
+                published = item.published_at
+                if published is None:
+                    # No timestamp: accept only if we have seen this feed before
+                    # (first run would otherwise pull the entire archive).
+                    if source.last_success_at is not None:
+                        fresh.append(item)
+                    continue
+                if published.tzinfo is None:
+                    published = published.replace(tzinfo=timezone.utc)
+                if published >= cutoff:
+                    fresh.append(item)
+            skipped = len(items) - len(fresh)
+            if skipped:
+                log.debug("stale_items_skipped", source=source_id, skipped=skipped)
+            items = fresh
 
         for item in items:
             try:
@@ -136,6 +186,10 @@ class IngestionPipeline:
         match_score = match.score
         matched_keywords = match.matched_keywords
 
+        # World news are kept even without a city keyword match (they are of
+        # general interest); everything else must be regionally relevant.
+        is_world = _looks_like_world_news(item.title, item.text)
+
         # If the source is explicitly bound to cities, its posts belong to those
         # cities directly — keyword matching only picks the best one, and we do
         # not drop items that fail the keyword threshold.
@@ -146,8 +200,22 @@ class IngestionPipeline:
                 match_score = max(match_score, 1.0)
                 matched_keywords = matched_keywords or []
         elif matched_city is None or match_score < min_score:
-            report.unmatched += 1
-            return None
+            # Nothing matched any monitored city → this is not local news. Such
+            # items are classified as world news and routed to the world topic
+            # instead of being discarded (unless world news are switched off).
+            if not self._world_news_enabled:
+                report.unmatched += 1
+                return None
+            is_world = True
+            # A city is still required to resolve channels/topic, so fall back to
+            # the first active one; the world topic overrides its moderation
+            # thread.
+            fallback = await self._all_active_cities()
+            if not fallback:
+                report.unmatched += 1
+                return None
+            matched_city = fallback[0]
+            match_score = max(match_score, 0.0)
 
         # 2) Dedup
         dedup_result = await dedup.check(
@@ -160,6 +228,10 @@ class IngestionPipeline:
             report.duplicates += 1
             log.debug("duplicate_skipped", reason=dedup_result.reason, of=dedup_result.duplicate_of)
             return None
+
+        # Detect a follow-up: strongly similar to a recent published item but
+        # not an outright duplicate → publish as a reply to that message.
+        follow_up_of = await self._find_follow_up_target(item, matched_city.id)
 
         # 3) Persist raw news
         news = News(
@@ -174,6 +246,9 @@ class IngestionPipeline:
             simhash=dedup_result.simhash,
             match_score=match_score,
             matched_keywords=matched_keywords,
+            source_published_at=item.published_at,
+            is_world_news=is_world,
+            reply_to_news_id=follow_up_of,
         )
         self.session.add(news)
         await self.session.flush()
@@ -187,6 +262,47 @@ class IngestionPipeline:
         news.status = NewsStatus.PENDING
         await self.session.flush()
         return news.id
+
+    async def _find_follow_up_target(self, item: ParsedItem, city_id: int) -> int | None:
+        """Find a recently published news this item continues, if any.
+
+        A follow-up is textually related to an earlier item (shared topic) but
+        not similar enough to be a duplicate. We compare against published news
+        of the same city from the last 3 days and require a moderate similarity
+        band, so unrelated news are never threaded.
+        """
+        from datetime import timedelta
+
+        from shared.services.text_utils import similarity_ratio
+
+        since = datetime.now(timezone.utc) - timedelta(days=3)
+        candidates = (
+            await self.session.scalars(
+                select(News)
+                .where(
+                    News.city_id == city_id,
+                    News.status == NewsStatus.PUBLISHED,
+                    News.created_at >= since,
+                    News.published_message_ids != {},
+                )
+                .order_by(News.created_at.desc())
+                .limit(50)
+            )
+        ).all()
+
+        blob = f"{item.title or ''} {item.text}"
+        best_id: int | None = None
+        best_score = 0.0
+        for other in candidates:
+            other_blob = f"{other.original_title or ''} {other.original_text or ''}"
+            score = similarity_ratio(blob, other_blob)
+            # Related but not duplicate: 0.55–0.85 similarity band.
+            if 0.55 <= score < 0.85 and score > best_score:
+                best_score = score
+                best_id = other.id
+        if best_id is not None:
+            log.debug("follow_up_detected", target=best_id, score=round(best_score, 3))
+        return best_id
 
     async def _ingest_media(self, news: News, item: ParsedItem) -> None:
         for position, media in enumerate(item.media):
@@ -216,6 +332,8 @@ class IngestionPipeline:
             news.title = result.title or news.original_title
             news.text = result.text or news.original_text
             news.ai_profile_id = profile.id
+            # Prefer the AI-picked emoji, fall back to keyword matching.
+            news.emoji = result.emoji or guess_emoji(news.title, news.text or "")
             if result.embedding:
                 news.embedding = result.embedding
         except Exception as exc:  # noqa: BLE001
@@ -224,3 +342,9 @@ class IngestionPipeline:
             news.title = news.original_title
             news.text = news.original_text
             news.error = f"AI: {exc}"[:500]
+            # Still pick an emoji locally so posts are not left bare when the
+            # AI provider is unavailable (quota, network, misconfiguration).
+            if not news.emoji:
+                news.emoji = guess_emoji(news.original_title, news.original_text)
+        finally:
+            news.ai_processed_at = datetime.now(timezone.utc)

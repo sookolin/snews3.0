@@ -13,15 +13,34 @@ from shared.models.setting import Setting
 DEFAULTS: dict[str, dict[str, Any]] = {
     "dedup.simhash_max_distance": {"value": 3, "category": "dedup"},
     "dedup.text_similarity_threshold": {"value": 0.9, "category": "dedup"},
+    "dedup.title_similarity_threshold": {"value": 0.72, "category": "dedup"},
     "dedup.embedding_threshold": {"value": 0.92, "category": "dedup"},
     "dedup.lookback_days": {"value": 14, "category": "dedup"},
     "matching.min_score": {"value": 0.3, "category": "matching"},
     "pipeline.auto_publish_on_approve": {"value": True, "category": "pipeline"},
     "pipeline.require_moderation": {"value": True, "category": "pipeline"},
+    # Minutes between consecutive automatic publications (0 = no spacing).
+    "pipeline.publish_interval_minutes": {"value": 5, "category": "pipeline"},
+    # Ignore items older than this when parsing (real-time mode, 0 = disabled).
+    "pipeline.max_item_age_minutes": {"value": 30, "category": "pipeline"},
+    # Keep items that match no monitored city as world news (else drop them).
+    "pipeline.keep_world_news": {"value": True, "category": "pipeline"},
     "notifications.email_enabled": {"value": False, "category": "notifications"},
     "notifications.webhook_url": {"value": "", "category": "notifications"},
     "ui.default_language": {"value": "ru", "category": "ui"},
     "site.favicon_url": {"value": "", "category": "ui"},
+    "bot.username": {"value": "", "category": "telegram"},
+    # Separate moderation topic for world/federal news (like a city topic).
+    "telegram.world_topic_id": {"value": 0, "category": "telegram"},
+    # Display timezone offset (hours) for moderator-facing timestamps.
+    "ui.timezone_offset_hours": {"value": 3, "category": "ui"},
+    # Email notifications.
+    "notifications.email_to": {"value": "", "category": "notifications"},
+    "notifications.smtp_host": {"value": "", "category": "notifications"},
+    "notifications.smtp_port": {"value": 587, "category": "notifications"},
+    "notifications.smtp_user": {"value": "", "category": "notifications"},
+    "notifications.smtp_password": {"value": "", "category": "notifications"},
+    "notifications.smtp_from": {"value": "", "category": "notifications"},
 }
 
 

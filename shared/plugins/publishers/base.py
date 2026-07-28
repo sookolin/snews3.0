@@ -25,6 +25,8 @@ class PublishRequest:
     location_address: str | None = None
     # Inline keyboard: list of rows, each a list of {"text": str, "url": str}.
     buttons: list = field(default_factory=list)
+    # Reply to an existing message in the target chat (follow-up threading).
+    reply_to_message_id: int | None = None
 
 
 @dataclass

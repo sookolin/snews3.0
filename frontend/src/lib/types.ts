@@ -37,6 +37,16 @@ export interface Source {
   error_count: number;
 }
 
+export interface NewsMedia {
+  id: number;
+  type: string;
+  remote_url?: string | null;
+  processed_path?: string | null;
+  file_path?: string | null;
+  is_spoiler: boolean;
+  is_enabled: boolean;
+}
+
 export interface NewsItem {
   id: number;
   title?: string;
@@ -49,6 +59,16 @@ export interface NewsItem {
   is_spoiler: boolean;
   author_name?: string | null;
   submitted_anonymously?: boolean;
+  submitted_by_telegram_id?: number | null;
+  moderated_by?: number | null;
+  source_published_at?: string | null;
+  processed_at?: string | null;
+  template_id?: number | null;
+  emoji?: string | null;
+  is_edited?: boolean;
+  is_world_news?: boolean;
+  published_message_ids?: Record<string, number[]>;
+  media?: NewsMedia[];
   scheduled_at?: string;
   published_at?: string;
   created_at: string;
@@ -90,4 +110,7 @@ export interface User {
   is_active: boolean;
   is_2fa_enabled: boolean;
   language: string;
+  telegram_id?: number | null;
+  yandex_id?: string | null;
+  permissions?: { grant?: string[]; deny?: string[] };
 }

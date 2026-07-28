@@ -37,6 +37,9 @@ class DedupConfig:
 
     simhash_max_distance: int = 3
     text_similarity_threshold: float = 0.9
+    #: Headline similarity above which two items are the same story even when
+    #: they come from different outlets with different wording.
+    title_similarity_threshold: float = 0.72
     embedding_threshold: float = 0.92
     lookback_days: int = 14
 
@@ -63,9 +66,14 @@ class DedupService:
         title: str | None = None,
         url: str | None = None,
         embedding: list[float] | None = None,
-        city_id: int | None = None,
+        city_id: int | None = None,  # noqa: ARG002 - kept for API compatibility
     ) -> DedupResult:
-        """Return whether the item duplicates an existing one."""
+        """Return whether the item duplicates an existing one.
+
+        ``city_id`` is accepted for backwards compatibility but intentionally
+        not used to narrow the comparison: duplicates frequently arrive from
+        different sources and may be assigned to different cities.
+        """
         chash = content_hash((title or "") + " " + text)
         shash = compute_simhash((title or "") + " " + text)
 
@@ -86,11 +94,17 @@ class DedupService:
             if by_url is not None:
                 return DedupResult(True, by_url, "url", chash, shash)
 
-        # 3) Fuzzy signals against recent items (optionally same city).
-        stmt = select(News).where(News.created_at >= since)
-        if city_id is not None:
-            stmt = stmt.where(News.city_id == city_id)
-        stmt = stmt.order_by(News.created_at.desc()).limit(500)
+        # 3) Fuzzy signals against recent items.
+        #
+        # Deliberately NOT restricted to one city: the same story is often picked
+        # up by several outlets and may be matched to different cities, so the
+        # comparison must be global to catch cross-source duplicates.
+        stmt = (
+            select(News)
+            .where(News.created_at >= since)
+            .order_by(News.created_at.desc())
+            .limit(500)
+        )
         recent = (await self.session.scalars(stmt)).all()
 
         for other in recent:
@@ -105,6 +119,14 @@ class DedupService:
 
             if title and other.original_title and title.strip() == other.original_title.strip():
                 return DedupResult(True, other.id, "title", chash, shash)
+
+            # Same story published by two different outlets: the wording differs
+            # but the headline stays close. Compare headlines separately with a
+            # dedicated threshold, otherwise long bodies dilute the similarity.
+            if title and other.original_title:
+                title_score = similarity_ratio(title, other.original_title)
+                if title_score >= self.config.title_similarity_threshold:
+                    return DedupResult(True, other.id, "title_similarity", chash, shash)
 
             if similarity_ratio(text, other_blob) >= self.config.text_similarity_threshold:
                 return DedupResult(True, other.id, "text_similarity", chash, shash)

@@ -116,3 +116,23 @@ def has_permission(role: UserRole, permission: Permission) -> bool:
     if role == UserRole.SUPER_ADMIN:
         return True
     return permission in permissions_for_role(role)
+
+
+def user_has_permission(user: object, permission: Permission) -> bool:
+    """Check a permission for a user, applying per-user grant/deny overrides.
+
+    ``user.permissions`` may contain ``{"grant": [...], "deny": [...]}`` with
+    permission values; ``deny`` wins over everything except SUPER_ADMIN.
+    """
+    role = getattr(user, "role", None)
+    overrides = getattr(user, "permissions", None) or {}
+    deny = set(overrides.get("deny") or [])
+    grant = set(overrides.get("grant") or [])
+
+    if permission.value in deny:
+        return False
+    if permission.value in grant:
+        return True
+    if role is None:
+        return False
+    return has_permission(role, permission)

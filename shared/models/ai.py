@@ -53,5 +53,8 @@ class AIProfile(Base, TimestampMixin):
     # Whether to also produce an embedding for semantic dedup
     generate_embeddings: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    # Ask the model to pick an emoji matching the headline.
+    auto_emoji: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<AIProfile {self.id} {self.name} {self.provider}>"

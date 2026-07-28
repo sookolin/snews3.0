@@ -22,6 +22,7 @@ export default function LogsPage() {
     <div>
       <PageHeader title="Логи" />
       <div className="card overflow-hidden">
+        <div className="table-wrap">
         <table className="w-full text-sm">
           <thead className="bg-muted text-left text-muted-foreground">
             <tr>
@@ -44,6 +45,7 @@ export default function LogsPage() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );

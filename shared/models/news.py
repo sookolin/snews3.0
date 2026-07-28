@@ -45,7 +45,7 @@ class News(Base, TimestampMixin):
 
     status: Mapped[NewsStatus] = mapped_column(
         Enum(NewsStatus, native_enum=False, length=32),
-        default=NewsStatus.NEW,
+        default=NewsStatus.PROCESSING,
         nullable=False,
         index=True,
     )
@@ -84,6 +84,38 @@ class News(Base, TimestampMixin):
 
     # Inline keyboard buttons: list of rows, each row a list of {text, url}.
     buttons: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+
+    # Emoji chosen (by AI or editor) to accent the title.
+    emoji: Mapped[str | None] = mapped_column(String(16))
+
+    # Manual source override (used instead of the linked Source name) and a
+    # flag to hide the source line entirely for this post.
+    source_name: Mapped[str | None] = mapped_column(String(255))
+    hide_source: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Manual link to the original publication (used for the {source} hyperlink
+    # when it differs from ``original_url``).
+    source_url_override: Mapped[str | None] = mapped_column(String(2048))
+
+    # When the item was published at the original source (moderator info only).
+    source_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When a moderator approved/processed the item (moderator info only).
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When the AI rewrite finished (internal diagnostics).
+    ai_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Skip the publication queue and go out immediately.
+    publish_immediately: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Edited after being published (shown as an extra "изменено" tag).
+    is_edited: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Follow-up threading: publish as a reply to this earlier news' message.
+    reply_to_news_id: Mapped[int | None] = mapped_column(
+        ForeignKey("news.id", ondelete="SET NULL")
+    )
+    # Marked as world news: allowed through even without a city keyword match.
+    is_world_news: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # User submission metadata
     submitted_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger)

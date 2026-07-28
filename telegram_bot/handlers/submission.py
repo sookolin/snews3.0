@@ -19,7 +19,7 @@ from aiogram.types import (
 from sqlalchemy import select
 
 from shared.database import session_scope
-from shared.enums import MediaType, NewsOrigin, NewsStatus
+from shared.enums import MediaType, NewsOrigin
 from shared.i18n import t
 from shared.logging import get_logger
 from shared.models.city import City
@@ -42,7 +42,9 @@ _EXT = {
 }
 
 
-async def _download_media(bot, file_id: str, media_type: str, news_id: int, position: int) -> str | None:  # type: ignore[no-untyped-def]
+async def _download_media(  # type: ignore[no-untyped-def]
+    bot, file_id: str, media_type: str, news_id: int, position: int
+) -> str | None:
     """Download a Telegram file to MEDIA_ROOT; return the relative path."""
     import os
 
@@ -69,10 +71,91 @@ class Submit(StatesGroup):
     attaching_media = State()
     attaching_location = State()
     choosing_anonymity = State()
+    entering_author = State()
+
+
+@router.message(CommandStart(deep_link=True))
+async def cmd_start_deeplink(message: Message, state: FSMContext) -> None:
+    """Handle deep links like ``t.me/bot?start=suggest_5`` (city preselected)."""
+    payload = (message.text or "").partition(" ")[2].strip()
+    if payload.startswith("suggest_"):
+        raw = payload.removeprefix("suggest_")
+        if raw.isdigit():
+            city_id = int(raw)
+            async with session_scope() as session:
+                city = await session.get(City, city_id)
+            if city is not None and city.is_active:
+                await state.clear()
+                await state.update_data(city_id=city_id, media=[])
+                await state.set_state(Submit.entering_text)
+                await message.answer(
+                    f"Город: <b>{city.name}</b>\n{t('bot.enter_text', _LANG)}",
+                    parse_mode="HTML",
+                )
+                return
+    if payload == "suggest":
+        await cmd_suggest(message, state)
+        return
+    await message.answer(t("bot.start", _LANG))
+
+
+async def _admin_keyboard(telegram_id: int):  # type: ignore[no-untyped-def]
+    """Return a mini-app keyboard when the Telegram user is a linked admin.
+
+    The admin panel is opened as a Telegram Web App, already associated with
+    the account linked to this Telegram id. Telegram only accepts HTTPS URLs
+    for web apps, so the button is omitted for local (http) setups.
+    """
+    from shared.config import settings
+    from shared.enums import Permission
+    from shared.security import user_has_permission
+    from shared.services.user_service import UserService
+
+    async with session_scope() as session:
+        user = await UserService(session).get_by_telegram_id(telegram_id)
+        if user is None or not user.is_active:
+            return None
+        if not user_has_permission(user, Permission.NEWS_VIEW):
+            return None
+
+    url = settings.admin_panel_url.rstrip("/")
+    if not url.startswith("https://"):
+        return None  # Telegram requires HTTPS for Web Apps
+
+    from aiogram.types import (
+        InlineKeyboardButton,
+        InlineKeyboardMarkup,
+        WebAppInfo,
+    )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🖥 Открыть админку",
+                    web_app=WebAppInfo(url=f"{url}/news"),
+                )
+            ]
+        ]
+    )
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
+    """Greeting; linked admins additionally get a mini-app button."""
+    keyboard = None
+    if message.from_user is not None:
+        try:
+            keyboard = await _admin_keyboard(message.from_user.id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("admin_keyboard_failed", error=str(exc))
+
+    if keyboard is not None:
+        await message.answer(
+            f"{t('bot.start', _LANG)}\n\nВы вошли как администратор.",
+            reply_markup=keyboard,
+        )
+        return
     await message.answer(t("bot.start", _LANG))
 
 
@@ -204,20 +287,37 @@ async def skip_location(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(Submit.choosing_anonymity, F.data.startswith("sub_anon:"))
-async def finalize(callback: CallbackQuery, state: FSMContext) -> None:
+async def chose_anonymity(callback: CallbackQuery, state: FSMContext) -> None:
     anonymous = callback.data.split(":", 1)[1] == "1"
-    data = await state.get_data()
-    await state.clear()
+    await state.update_data(anonymous=anonymous)
+    if anonymous:
+        await _create_submission(callback.message, callback.from_user, state, author_name=None)
+    else:
+        await state.set_state(Submit.entering_author)
+        await callback.message.answer("Укажите ваше имя и фамилию (будет показано как «Автор: …»):")
+    await callback.answer()
 
-    user = callback.from_user
-    author_name = None if anonymous else (user.full_name or user.username)
+
+@router.message(Submit.entering_author, F.text)
+async def entered_author(message: Message, state: FSMContext) -> None:
+    author = (message.text or "").strip()[:255] or None
+    await _create_submission(message, message.from_user, state, author_name=author)
+
+
+async def _create_submission(message, user, state: FSMContext, author_name: str | None) -> None:  # type: ignore[no-untyped-def]
+    """Persist the submission (status PROCESSING) and enqueue AI + moderation."""
+    from shared.enums import NewsStatus
+
+    data = await state.get_data()
+    anonymous = bool(data.get("anonymous"))
+    await state.clear()
 
     async with session_scope() as session:
         news = News(
             original_text=data.get("text", ""),
             title=None,
             text=data.get("text", ""),
-            status=NewsStatus.PENDING,
+            status=NewsStatus.PROCESSING,
             origin=NewsOrigin.USER,
             city_id=data.get("city_id"),
             submitted_by_telegram_id=user.id,
@@ -233,7 +333,7 @@ async def finalize(callback: CallbackQuery, state: FSMContext) -> None:
 
         for position, item in enumerate(data.get("media", [])):
             rel_path = await _download_media(
-                callback.bot, item["file_id"], item["type"], news.id, position
+                message.bot, item["file_id"], item["type"], news.id, position
             )
             session.add(
                 MediaAsset(
@@ -246,24 +346,13 @@ async def finalize(callback: CallbackQuery, state: FSMContext) -> None:
             )
         await session.commit()
         news_id = news.id
-        city_id = news.city_id
 
-    # Notify the moderation topic (best-effort).
+    # Run AI rewrite + send the moderation card via the worker queue.
     try:
-        async with session_scope() as session:
-            fresh = await session.get(News, news_id)
-            city = await session.get(City, city_id) if city_id else None
-            if fresh and city:
-                from shared.services.telegram_admin import TelegramAdminService
+        from workers.tasks import process_submission
 
-                mid = await TelegramAdminService().send_moderation_card(
-                    fresh, city, lang=city.language
-                )
-                if mid:
-                    fresh.moderation_message_id = mid
-                    await session.commit()
+        process_submission.delay(news_id)
     except Exception as exc:  # noqa: BLE001
-        log.warning("submission_notify_failed", news=news_id, error=str(exc))
+        log.warning("submission_enqueue_failed", news=news_id, error=str(exc))
 
-    await callback.message.answer(t("bot.submitted", _LANG))
-    await callback.answer()
+    await message.answer(t("bot.submitted", _LANG))

@@ -72,6 +72,35 @@ async def delete_template(
     return Message(detail="Template deleted")
 
 
+@router.post("/{template_id}/duplicate", response_model=TemplateOut, status_code=201)
+async def duplicate_template(
+    template_id: int,
+    session: DBSession,
+    _: User = Depends(require_permission(Permission.TEMPLATE_MANAGE)),
+) -> TemplateOut:
+    """Create a copy of a template (never inherits the "default" flag)."""
+    source = await CRUDService(session, Template).get_or_404(template_id)
+    copy = Template(
+        name=f"{source.name} (копия)"[:255],
+        is_default=False,
+        is_active=source.is_active,
+        format=source.format,
+        header=source.header,
+        body=source.body,
+        footer=source.footer,
+        separator=source.separator,
+        custom_emoji_id=source.custom_emoji_id,
+        subscribe_link=source.subscribe_link,
+        variables=dict(source.variables or {}),
+        disable_web_preview=source.disable_web_preview,
+        uppercase_title=source.uppercase_title,
+    )
+    session.add(copy)
+    await session.flush()
+    await session.refresh(copy)
+    return TemplateOut.model_validate(copy)
+
+
 @router.post("/{template_id}/preview", response_model=Message)
 async def preview_template(
     template_id: int,
@@ -89,5 +118,7 @@ async def preview_template(
         source="Пример источника",
         source_url="https://example.com",
         city="Пример города",
+        author="Иван Иванов",
+        emoji="🔥",
     )
     return Message(detail=rendered)

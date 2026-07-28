@@ -48,6 +48,10 @@ celery_app.conf.beat_schedule = {
         "task": "workers.tasks.publish_scheduled_news",
         "schedule": 60.0,
     },
+    "publish-scheduled-ads": {
+        "task": "workers.tasks.publish_scheduled_ads",
+        "schedule": 60.0,
+    },
     "nightly-backup": {
         "task": "workers.tasks.run_backup",
         "schedule": crontab(hour=settings.backup_cron_hour, minute=0),

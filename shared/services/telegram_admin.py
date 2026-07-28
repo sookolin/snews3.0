@@ -8,12 +8,47 @@ with inline buttons to the city's topic in the moderation group).
 from __future__ import annotations
 
 from shared.config import settings
-from shared.i18n import t
+from shared.enums import NewsStatus
 from shared.logging import get_logger
 from shared.models.city import City
 from shared.models.news import News
 
 log = get_logger("telegram_admin")
+
+#: Human-readable status tags shown on moderation cards.
+STATUS_TAGS: dict[str, str] = {
+    "processing": "⏳ обработка",
+    "pending": "🟡 на модерации",
+    "approved": "🟢 одобрено",
+    "scheduled": "🕒 запланировано",
+    "published": "📤 опубликовано",
+    "withdrawn": "↩️ отозвано",
+    "rejected": "🔴 отклонено",
+    "failed": "⚠️ ошибка",
+}
+
+
+def _is_public_url(url: str) -> bool:
+    """Whether Telegram will accept the URL in an inline keyboard button.
+
+    Telegram rejects localhost / bare-IP / non-http(s) targets with
+    "Wrong HTTP URL", which fails the entire sendMessage call.
+    """
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower()
+    if host in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
+        return False
+    # Private ranges and hosts without a dot (e.g. docker service names).
+    if host.startswith(("10.", "192.168.", "172.16.", "172.17.", "172.18.")):
+        return False
+    return "." in host
 
 
 class TelegramAdminService:
@@ -50,64 +85,408 @@ class TelegramAdminService:
         finally:
             await bot.session.close()
 
-    def build_moderation_keyboard(self, news: News, lang: str = "ru"):  # type: ignore[no-untyped-def]
-        """Build the inline keyboard shown on a moderation card."""
-        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    async def fetch_chat_info(self, chat_id: str) -> dict | None:
+        """Read a channel's real title, username and avatar URL from Telegram.
 
-        admin_url = f"{settings.admin_panel_url}/news/{news.id}"
-        rows = [
-            [
-                InlineKeyboardButton(
-                    text=t("moderation.approve", lang), callback_data=f"mod:approve:{news.id}"
-                ),
-                InlineKeyboardButton(
-                    text=t("moderation.reject", lang), callback_data=f"mod:reject:{news.id}"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text=t("moderation.edit", lang), callback_data=f"mod:edit:{news.id}"
-                ),
-                InlineKeyboardButton(
-                    text=t("moderation.spoiler", lang), callback_data=f"mod:spoiler:{news.id}"
-                ),
-            ],
-            [InlineKeyboardButton(text=t("moderation.open_admin", lang), url=admin_url)],
-        ]
-        if news.original_url:
-            rows.append(
-                [InlineKeyboardButton(text=t("moderation.original", lang), url=news.original_url)]
-            )
-        return InlineKeyboardMarkup(inline_keyboard=rows)
+        The bot must be a member/admin of the chat. The avatar is downloaded to
+        MEDIA_ROOT so the admin panel can display it without a Telegram token.
+        """
+        import os
 
-    async def send_moderation_card(self, news: News, city: City, lang: str = "ru") -> int | None:
-        """Send the moderation card to the city's topic. Returns the message id."""
+        from shared.plugins.publishers.telegram_publisher import TelegramPublisher
+
+        if not self.token:
+            return None
+        bot = self._bot()
+        try:
+            target = TelegramPublisher._normalize_chat_id(chat_id)
+            chat = await bot.get_chat(target)
+            info: dict = {
+                "title": chat.title or chat.full_name or "",
+                "username": chat.username or "",
+                "avatar_url": None,
+            }
+
+            photo = getattr(chat, "photo", None)
+            if photo is not None:
+                file_id = photo.big_file_id or photo.small_file_id
+                if file_id:
+                    tg_file = await bot.get_file(file_id)
+                    rel_dir = "channels"
+                    os.makedirs(os.path.join(settings.media_root, rel_dir), exist_ok=True)
+                    safe = str(target).lstrip("@-")
+                    rel_path = os.path.join(rel_dir, f"{safe}.jpg")
+                    await bot.download_file(
+                        tg_file.file_path,
+                        destination=os.path.join(settings.media_root, rel_path),
+                    )
+                    info["avatar_url"] = f"/media/{rel_path.replace(os.sep, '/')}"
+            return info
+        except Exception as exc:  # noqa: BLE001
+            log.warning("fetch_chat_info_failed", chat=chat_id, error=str(exc))
+            return None
+        finally:
+            await bot.session.close()
+
+    async def create_topic(self, name: str) -> int | None:
+        """Create an arbitrary forum topic (used for the world-news topic)."""
         if not self.group_id:
             return None
         bot = self._bot()
         try:
-            title = news.title or news.original_title or "—"
-            preview = (news.text or news.original_text or "")[:600]
-            score = f"{news.match_score:.0%}" if news.match_score is not None else "—"
-            body = (
-                f"🆕 <b>{title}</b>\n\n"
-                f"{preview}\n\n"
-                f"🏙 {city.name} · 🎯 {score} · 🆔 {news.id}"
-            )
+            topic = await bot.create_forum_topic(chat_id=self.group_id, name=name[:128])
+            return topic.message_thread_id
+        except Exception as exc:  # noqa: BLE001
+            log.error("create_topic_failed", name=name, error=str(exc))
+            return None
+        finally:
+            await bot.session.close()
+
+    async def delete_messages(self, chat_id: str, message_ids: list[int]) -> int:
+        """Delete a batch of messages; returns how many were removed."""
+        from shared.plugins.publishers.telegram_publisher import TelegramPublisher
+
+        if not self.token or not message_ids:
+            return 0
+        bot = self._bot()
+        removed = 0
+        try:
+            target = TelegramPublisher._normalize_chat_id(chat_id)
+            for message_id in message_ids:
+                try:
+                    await bot.delete_message(chat_id=target, message_id=message_id)
+                    removed += 1
+                except Exception:  # noqa: BLE001 - already gone or too old
+                    continue
+            return removed
+        finally:
+            await bot.session.close()
+
+    async def test_topic(self, city: City) -> tuple[bool, str]:
+        """Send a test message to the city's topic to verify the binding."""
+        if not self.group_id:
+            return False, "Не задан ID группы модерации (TELEGRAM_MODERATION_GROUP_ID)"
+        bot = self._bot()
+        try:
             kwargs: dict = {
                 "chat_id": self.group_id,
-                "text": body,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-                "reply_markup": self.build_moderation_keyboard(news, lang),
+                "text": f"✅ Проверка привязки топика для города «{city.name}».",
             }
             if city.telegram_topic_id:
                 kwargs["message_thread_id"] = city.telegram_topic_id
-            message = await bot.send_message(**kwargs)
+            msg = await bot.send_message(**kwargs)
+            return (
+                True,
+                f"Сообщение доставлено (id={msg.message_id}, "
+                f"topic={city.telegram_topic_id})",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return False, str(exc)
+        finally:
+            await bot.session.close()
+
+    def build_moderation_keyboard(self, news: News, lang: str = "ru"):  # type: ignore[no-untyped-def]
+        """Build the inline keyboard shown on a moderation card.
+
+        Buttons are coloured via the Bot API 9.4 ``style`` field:
+        approve = success (green), reject/delete = danger (red),
+        edit = primary (blue link to the admin panel).
+        """
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+        supports_style = "style" in InlineKeyboardButton.model_fields
+
+        def button(text: str, *, style: str | None = None, **kwargs: object):  # type: ignore[no-untyped-def]
+            data = {"text": text, **kwargs}
+            if style and supports_style:
+                data["style"] = style
+            return InlineKeyboardButton(**data)
+
+        admin_url = f"{settings.admin_panel_url.rstrip('/')}/news/{news.id}"
+        is_published = bool(news.published_message_ids)
+
+        # Icon-only buttons keep the card compact.
+        edit_kwargs: dict = (
+            {"url": admin_url}
+            if _is_public_url(admin_url)
+            else {"callback_data": f"mod:edit:{news.id}"}
+        )
+
+        # Buttons carry full text labels (icons alone were unclear).
+        if is_published or news.status == NewsStatus.WITHDRAWN:
+            # Already handled: allow withdrawing / re-publishing / full removal.
+            rows = [
+                [button("✏️ Редактировать", style="primary", **edit_kwargs)],
+            ]
+            if is_published:
+                rows.append(
+                    [
+                        button(
+                            "↩️ Снять с публикации",
+                            style="primary",
+                            callback_data=f"mod:unpublish:{news.id}",
+                        )
+                    ]
+                )
+            else:
+                rows.append(
+                    [
+                        button(
+                            "📤 Опубликовать снова",
+                            style="success",
+                            callback_data=f"mod:approve:{news.id}",
+                        )
+                    ]
+                )
+            rows.append(
+                [
+                    button(
+                        "🗑 Удалить полностью",
+                        style="danger",
+                        callback_data=f"mod:purge:{news.id}",
+                    )
+                ]
+            )
+        else:
+            rows = [
+                [
+                    button("✅ Одобрить", style="success", callback_data=f"mod:approve:{news.id}"),
+                    button("❌ Отклонить", style="danger", callback_data=f"mod:reject:{news.id}"),
+                ],
+                [
+                    button("✏️ Редактировать", style="primary", **edit_kwargs),
+                    button(
+                        "🗑 Удалить",
+                        style="danger",
+                        callback_data=f"mod:delete:{news.id}",
+                    ),
+                ],
+                [
+                    button(
+                        "⚡️ Опубликовать сразу",
+                        style="success",
+                        callback_data=f"mod:now:{news.id}",
+                    ),
+                    button("🌐 Во все каналы", callback_data=f"mod:all:{news.id}"),
+                ],
+            ]
+
+        if news.original_url and _is_public_url(news.original_url):
+            rows.append([button("📄 Оригинал", url=news.original_url)])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    @staticmethod
+    def _first_media_input(news: News):  # type: ignore[no-untyped-def]
+        """Return an uploadable object for the first photo attachment, if any.
+
+        Only photos are previewed on the card: videos/documents would make the
+        card heavy, and the point is a quick visual check before approving.
+        ``news.media`` must already be loaded by the caller.
+        """
+        import os
+
+        from shared.config import settings
+        from shared.enums import MediaType
+
+        try:
+            assets = list(news.media or [])
+        except Exception:  # noqa: BLE001 - relationship not loaded
+            return None
+
+        for asset in sorted(assets, key=lambda a: a.position or 0):
+            if not asset.is_enabled or asset.type != MediaType.PHOTO:
+                continue
+            path = asset.processed_path or asset.file_path
+            if path:
+                abs_path = (
+                    path if os.path.isabs(path) else os.path.join(settings.media_root, path)
+                )
+                if os.path.exists(abs_path):
+                    from aiogram.types import FSInputFile
+
+                    return FSInputFile(abs_path)
+            if asset.telegram_file_id:
+                return asset.telegram_file_id
+            if asset.remote_url:
+                from aiogram.types import URLInputFile
+
+                return URLInputFile(asset.remote_url)
+        return None
+
+    @staticmethod
+    def build_card_body(
+        news: News,
+        city: City,
+        *,
+        rendered: str | None = None,
+        source_name: str = "",
+        moderator: str | None = None,
+        tz_offset: int = 3,
+    ) -> str:
+        """Build the moderation card text.
+
+        The post itself is shown exactly as it will be published (``rendered``
+        template output). Below it we add a moderator-only info block: source
+        with a link to the original, publication time at the source and the
+        time AI finished processing.
+        """
+        from shared.services.html_sanitizer import sanitize_telegram_html
+
+        emoji = (news.emoji or "").strip()
+        title = news.title or news.original_title or ""
+
+        if rendered:
+            post = sanitize_telegram_html(rendered)
+        else:
+            body = news.text or news.original_text or ""
+            heading = f"{emoji} <b>{title}</b>".strip() if title else ""
+            post = sanitize_telegram_html(f"{heading}\n\n{body}" if heading else body)
+        post = post[:2500]
+
+        def fmt(value: object) -> str:
+            """Format a timestamp in the configured display timezone."""
+            if not value:
+                return "—"
+            try:
+                from datetime import timedelta, timezone as _tz
+
+                aware = value if value.tzinfo else value.replace(tzinfo=_tz.utc)  # type: ignore[union-attr]
+                local = aware.astimezone(_tz(timedelta(hours=tz_offset)))
+                return local.strftime("%d.%m.%Y %H:%M")
+            except AttributeError:
+                return str(value)
+
+        # The source link lives inside the rendered post itself, so the info
+        # block below only carries moderator metadata.
+        score = f"{news.match_score:.0%}" if news.match_score is not None else "—"
+        place = "🌍 Мировые новости" if news.is_world_news else f"🏙 {city.name}"
+        info = [
+            "➖➖➖➖➖",
+            f"🆔 {news.id} · {place} · 🎯 {score}",
+            f"🕐 В источнике: {fmt(news.source_published_at)}",
+        ]
+        if news.processed_at:
+            info.append(f"✅ Обработано: {fmt(news.processed_at)}")
+        if news.reply_to_news_id:
+            info.append(f"↩️ Дополнение к новости #{news.reply_to_news_id}")
+        if moderator:
+            info.append(f"👤 Обработал: {moderator}")
+
+        # Status tags, mirroring the admin panel.
+        tags = [STATUS_TAGS.get(news.status.value, news.status.value)]
+        if news.is_edited:
+            tags.append("✏️ изменено")
+        info.append("Статус: " + " · ".join(tags))
+
+        return f"{post}\n\n" + "\n".join(info)
+
+    async def send_moderation_card(
+        self,
+        news: News,
+        city: City,
+        lang: str = "ru",
+        *,
+        rendered: str | None = None,
+        source_name: str = "",
+        tz_offset: int = 3,
+        topic_id: int | None = None,
+    ) -> int | None:
+        """Send the moderation card to a topic. Returns the message id.
+
+        ``topic_id`` overrides the city's topic — used to route world news into
+        their own dedicated topic.
+        """
+        if not self.group_id:
+            return None
+        bot = self._bot()
+        try:
+            body = self.build_card_body(
+                news, city, rendered=rendered, source_name=source_name, tz_offset=tz_offset
+            )
+            common: dict = {"chat_id": self.group_id}
+            thread = topic_id or city.telegram_topic_id
+            if thread:
+                common["message_thread_id"] = thread
+            keyboard = self.build_moderation_keyboard(news, lang)
+
+            # Show the first attachment right on the card so moderators can see
+            # what will be published (media are attached to the news itself).
+            media_file = self._first_media_input(news)
+            if media_file is not None:
+                message = await bot.send_photo(
+                    photo=media_file,
+                    caption=body[:1024],
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                    **common,
+                )
+            else:
+                message = await bot.send_message(
+                    text=body,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                    reply_markup=keyboard,
+                    **common,
+                )
             log.info("moderation_card_sent", news=news.id, message=message.message_id)
             return message.message_id
         except Exception as exc:  # noqa: BLE001
             log.error("moderation_card_failed", news=news.id, error=str(exc))
             return None
+        finally:
+            await bot.session.close()
+
+    async def update_moderation_card(
+        self,
+        news: News,
+        city: City,
+        *,
+        status_line: str,
+        keep_buttons: bool = False,
+        lang: str = "ru",
+        rendered: str | None = None,
+        source_name: str = "",
+        moderator: str | None = None,
+        tz_offset: int = 3,
+    ) -> bool:
+        """Rewrite an existing moderation card after a decision.
+
+        Used to reflect approve/reject/delete on the card itself: the status and
+        the moderator are appended, and the buttons are removed (or restored
+        when a published post is taken down again).
+        """
+        if not self.group_id or not news.moderation_message_id:
+            return False
+        bot = self._bot()
+        try:
+            body = self.build_card_body(
+                news, city, rendered=rendered, source_name=source_name, moderator=moderator,
+                tz_offset=tz_offset,
+            )
+            full = f"{body}\n{status_line}"
+            keyboard = self.build_moderation_keyboard(news, lang) if keep_buttons else None
+            # Cards with media were sent as a photo (caption); text edits fail on
+            # them, so fall back to editing the caption.
+            try:
+                await bot.edit_message_text(
+                    chat_id=self.group_id,
+                    message_id=news.moderation_message_id,
+                    text=full,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                    reply_markup=keyboard,
+                )
+            except Exception:  # noqa: BLE001
+                await bot.edit_message_caption(
+                    chat_id=self.group_id,
+                    message_id=news.moderation_message_id,
+                    caption=full[:1024],
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            log.warning("moderation_card_update_failed", news=news.id, error=str(exc))
+            return False
         finally:
             await bot.session.close()

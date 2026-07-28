@@ -15,6 +15,51 @@ from shared.services.user_service import UserService
 router = APIRouter()
 
 
+PERMISSION_LABELS: dict[str, tuple[str, str]] = {
+    "city:view": ("Просмотр городов", "Города"),
+    "city:manage": ("Управление городами", "Города"),
+    "source:view": ("Просмотр источников", "Источники"),
+    "source:manage": ("Управление источниками", "Источники"),
+    "news:view": ("Просмотр новостей", "Новости"),
+    "news:edit": ("Редактирование новостей", "Новости"),
+    "news:moderate": ("Модерация (одобрить/отклонить)", "Новости"),
+    "news:publish": ("Публикация новостей", "Новости"),
+    "news:delete": ("Удаление новостей", "Новости"),
+    "template:manage": ("Управление шаблонами", "Оформление"),
+    "watermark:manage": ("Управление водяным знаком", "Оформление"),
+    "ai:manage": ("Настройка AI", "Оформление"),
+    "settings:manage": ("Настройки системы", "Система"),
+    "channel:manage": ("Каналы и реклама", "Публикация"),
+    "user:view": ("Просмотр пользователей", "Пользователи"),
+    "user:manage": ("Управление пользователями", "Пользователи"),
+    "logs:view": ("Просмотр логов", "Система"),
+    "backup:manage": ("Резервные копии", "Система"),
+    "monitoring:view": ("Мониторинг", "Система"),
+}
+
+
+@router.get("/permissions", response_model=dict)
+async def list_permissions(
+    _: User = Depends(require_permission(Permission.USER_VIEW)),
+) -> dict:
+    """Catalog of all permissions plus the defaults granted by each role."""
+    from shared.enums import ROLE_PERMISSIONS, UserRole
+
+    catalog = [
+        {
+            "value": p.value,
+            "label": PERMISSION_LABELS.get(p.value, (p.value, "Прочее"))[0],
+            "group": PERMISSION_LABELS.get(p.value, (p.value, "Прочее"))[1],
+        }
+        for p in Permission
+    ]
+    roles = {
+        role.value: sorted(perm.value for perm in perms)
+        for role, perms in ROLE_PERMISSIONS.items()
+    }
+    return {"permissions": catalog, "roles": roles, "all_roles": [r.value for r in UserRole]}
+
+
 @router.get("", response_model=Page[UserOut])
 async def list_users(
     session: DBSession,

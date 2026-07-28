@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from shared.enums import NewsOrigin, NewsStatus
+from shared.enums import NewsStatus
 from shared.exceptions import NotFoundError, PublishError
 from shared.logging import get_logger
 from shared.models.channel import Channel
@@ -24,6 +24,27 @@ from shared.services.media_service import MediaService
 from shared.services.template_renderer import TemplateRenderer
 
 log = get_logger("publisher_service")
+
+
+def channel_subscribe_link(channel: Channel) -> str:
+    """Public t.me link for a channel, used for the ``{link}`` placeholder.
+
+    Prefers the channel's ``@username``; falls back to a ``t.me/c/<id>`` link
+    for private channels, and to an empty string when neither is known (the
+    template's own ``subscribe_link`` then applies).
+    """
+    username = (channel.username or "").strip().lstrip("@")
+    if not username:
+        raw = (channel.chat_id or "").strip()
+        if raw and not raw.lstrip("-").isdigit():
+            username = raw.lstrip("@").rstrip("/").rsplit("/", 1)[-1]
+    if username:
+        return f"https://t.me/{username}"
+
+    raw_id = (channel.chat_id or "").strip()
+    if raw_id.startswith("-100") and raw_id[4:].isdigit():
+        return f"https://t.me/c/{raw_id[4:]}"
+    return ""
 
 
 class PublisherService:
@@ -58,7 +79,13 @@ class PublisherService:
         if news is None:
             raise NotFoundError(f"News {news_id} not found")
         if news.city_id is None:
-            raise PublishError("Cannot publish news without a city")
+            raise PublishError("Нельзя публиковать новость без города")
+        # Guard against double publication: an already published post must be
+        # withdrawn first, otherwise it would be duplicated in the channel.
+        if news.published_message_ids:
+            raise PublishError(
+                "Новость уже опубликована. Снимите публикацию, чтобы опубликовать заново."
+            )
 
         # Ensure relationships are loaded.
         await self.session.refresh(news, attribute_names=["media", "city"])
@@ -69,23 +96,44 @@ class PublisherService:
             )
         ).all()
         if not channels:
-            raise PublishError("City has no active channels")
+            raise PublishError("У города нет активных каналов")
 
+        # Follow-up threading: reply to the parent news' message per chat.
+        reply_map: dict[str, int] = {}
+        if news.reply_to_news_id:
+            parent = await self.session.get(News, news.reply_to_news_id)
+            if parent and parent.published_message_ids:
+                for chat_id, ids in (parent.published_message_ids or {}).items():
+                    if ids:
+                        reply_map[str(chat_id)] = ids[0]
+
+        # Source: manual override wins, then the linked Source name; can be
+        # hidden entirely per post.
         source_name = ""
-        source_url = news.original_url or ""
-        if news.source_id:
-            source = await self.session.get(Source, news.source_id)
-            if source:
-                source_name = source.name
+        # Manual link override wins; hidden source means no link at all.
+        source_url = (
+            "" if news.hide_source
+            else (news.source_url_override or news.original_url or "")
+        )
+        if not news.hide_source:
+            if news.source_name:
+                source_name = news.source_name
+            elif news.source_id:
+                source = await self.session.get(Source, news.source_id)
+                if source:
+                    source_name = source.name
 
-        # Author: for user submissions, use the author name unless anonymous.
-        author_name = ""
-        if news.origin == NewsOrigin.USER and not news.submitted_anonymously:
-            author_name = news.author_name or ""
+        # Author: show the author name unless it was explicitly hidden.
+        author_name = "" if news.submitted_anonymously else (news.author_name or "")
 
         # Process media (watermark) once.
         for asset in news.media:
-            if asset.processed_path is None:
+            # Re-process when nothing was produced yet, or when a previous run
+            # skipped watermarking (processed == original) but it is now wanted.
+            needs_processing = asset.processed_path is None or (
+                news.apply_watermark and asset.processed_path == asset.file_path
+            )
+            if needs_processing:
                 await self.media_service.process_asset(asset, apply_watermark=news.apply_watermark)
 
         published: dict[str, list[int]] = {}
@@ -108,7 +156,11 @@ class PublisherService:
                 source_url=source_url,
                 city=news.city.name if news.city else "",
                 author=author_name,
+                emoji=news.emoji or "",
                 published_at=datetime.now(timezone.utc),
+                # {link} points at the channel this copy is published to, so one
+                # template serves every city.
+                link=channel_subscribe_link(channel),
             )
 
             publisher_cls = publisher_registry.get("telegram")
@@ -124,6 +176,7 @@ class PublisherService:
                     location_title=news.location_title,
                     location_address=news.location_address,
                     buttons=news.buttons or [],
+                    reply_to_message_id=reply_map.get(str(channel.chat_id)),
                 )
             )
             if result.success:

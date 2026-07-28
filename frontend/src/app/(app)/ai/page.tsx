@@ -25,6 +25,7 @@ interface AIProfile {
   temperature: number;
   max_tokens: number;
   generate_embeddings: boolean;
+  auto_emoji?: boolean;
 }
 
 const DEFAULT_PROMPT =
@@ -36,6 +37,14 @@ const EMPTY: Partial<AIProfile> = {
   name: "", provider: "anthropic", system_prompt: DEFAULT_PROMPT,
   temperature: 0.4, max_tokens: 2048, generate_embeddings: true,
   is_default: false, is_active: true,
+};
+
+/** Human-readable provider names shown in the dropdown and the list. */
+const PROVIDER_LABELS: Record<string, string> = {
+  anthropic: "Anthropic (Claude)",
+  openai: "OpenAI (GPT)",
+  gemini: "Google (Gemini)",
+  local: "Локальная модель",
 };
 
 const PROVIDER_HINTS: Record<string, { model: string; base?: string; keyUrl: string }> = {
@@ -52,8 +61,10 @@ export default function AIPage() {
   const [error, setError] = useState<string | null>(null);
   const [text, setText] = useState("В горсовете обсудили ремонт дорог в центре города.");
   const [testProfile, setTestProfile] = useState<number | "">("");
-  const [result, setResult] = useState<{ title: string; text: string; provider: string } | null>(null);
+  const [testTemplate, setTestTemplate] = useState<number | "">("");
+  const [result, setResult] = useState<{ title: string; text: string; provider: string; emoji?: string | null; rendered?: string | null } | null>(null);
   const [testing, setTesting] = useState(false);
+  const { data: templates } = useSWR<Page<{ id: number; name: string }>>("/templates?size=100", fetcher);
 
   const openNew = () => { setForm({ ...EMPTY }); setError(null); };
   const openEdit = (p: AIProfile) => { setForm({ ...p, api_key: "" }); setError(null); };
@@ -86,7 +97,7 @@ export default function AIPage() {
     try {
       setResult(await api("/ai/test", {
         method: "POST",
-        body: JSON.stringify({ text, profile_id: testProfile || null }),
+        body: JSON.stringify({ text, profile_id: testProfile || null, template_id: testTemplate || null }),
       }));
     } catch (e) {
       setResult({ title: "Ошибка", text: (e as Error).message, provider: "" });
@@ -136,7 +147,7 @@ export default function AIPage() {
               <div className="flex items-center justify-between">
                 <span className="font-medium">{p.name}</span>
                 <div className="flex gap-1">
-                  {p.is_default && <span className="badge bg-emerald-100 text-emerald-700">default</span>}
+                  {p.is_default && <span className="badge bg-emerald-100 text-emerald-700">по умолчанию</span>}
                   {!p.is_active && <span className="badge bg-gray-100 text-gray-600">выключен</span>}
                   {p.has_api_key ? (
                     <span className="badge bg-green-100 text-green-700">ключ задан</span>
@@ -146,7 +157,9 @@ export default function AIPage() {
                 </div>
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
-                {p.provider} · {p.model || "модель по умолчанию"} · t={p.temperature} · {p.max_tokens} tok
+                {PROVIDER_LABELS[p.provider] ?? p.provider} ·{" "}
+                {p.model || "модель по умолчанию"} · температура {p.temperature} ·{" "}
+                {p.max_tokens} токенов
               </div>
               <div className="mt-3 flex gap-2">
                 <button className="btn-outline py-1" onClick={() => openEdit(p)}>Редактировать</button>
@@ -161,19 +174,36 @@ export default function AIPage() {
 
         <div className="card space-y-3 p-5">
           <h3 className="font-medium">Тест обработки</h3>
-          <select className="input" value={testProfile} onChange={(e) => setTestProfile(e.target.value ? Number(e.target.value) : "")}>
-            <option value="">Профиль по умолчанию</option>
-            {data?.items.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
+          <div className="grid grid-cols-2 gap-2">
+            <select className="input" value={testProfile} onChange={(e) => setTestProfile(e.target.value ? Number(e.target.value) : "")}>
+              <option value="">Профиль по умолчанию</option>
+              {data?.items.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <select className="input" value={testTemplate} onChange={(e) => setTestTemplate(e.target.value ? Number(e.target.value) : "")}>
+              <option value="">Без шаблона</option>
+              {templates?.items.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
           <textarea className="input min-h-[120px]" value={text} onChange={(e) => setText(e.target.value)} />
           <button className="btn-primary" disabled={testing} onClick={test}>
             {testing ? "Обработка…" : "Запустить тест"}
           </button>
           {result && (
             <div className="rounded-md bg-muted p-3 text-sm">
-              <div className="font-semibold">{result.title}</div>
-              <div className="mt-1 whitespace-pre-wrap">{result.text}</div>
-              {result.provider && <div className="mt-2 text-xs text-muted-foreground">Провайдер: {result.provider}</div>}
+              {result.rendered ? (
+                <div className="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: result.rendered }} />
+              ) : (
+                <>
+                  <div className="font-semibold">{result.emoji} {result.title}</div>
+                  <div className="mt-1 whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: result.text }} />
+                </>
+              )}
+              {result.provider && (
+                <div className="mt-2 text-xs text-muted-foreground">
+                  Провайдер: {PROVIDER_LABELS[result.provider] ?? result.provider}
+                  {result.emoji ? ` · эмодзи: ${result.emoji}` : ""}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -187,7 +217,9 @@ export default function AIPage() {
               <Field label="Название"><input className="input" value={form.name ?? ""} onChange={(e) => upd({ name: e.target.value })} /></Field>
               <Field label="Провайдер">
                 <select className="input" value={form.provider} onChange={(e) => upd({ provider: e.target.value })}>
-                  {(providers ?? ["anthropic", "openai", "gemini", "local"]).map((p) => <option key={p} value={p}>{p}</option>)}
+                  {(providers ?? ["anthropic", "openai", "gemini", "local"]).map((p) => (
+                    <option key={p} value={p}>{PROVIDER_LABELS[p] ?? p}</option>
+                  ))}
                 </select>
               </Field>
             </div>
@@ -226,6 +258,9 @@ export default function AIPage() {
             <div className="flex flex-wrap gap-6">
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={!!form.generate_embeddings} onChange={(e) => upd({ generate_embeddings: e.target.checked })} /> Эмбеддинги (семантич. дедуп)
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={form.auto_emoji ?? true} onChange={(e) => upd({ auto_emoji: e.target.checked })} /> Подбирать эмодзи к заголовку
               </label>
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={!!form.is_default} onChange={(e) => upd({ is_default: e.target.checked })} /> По умолчанию

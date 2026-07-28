@@ -7,7 +7,6 @@ substitution (missing placeholders render as empty strings, never raise).
 
 from __future__ import annotations
 
-import html
 from datetime import datetime
 
 from shared.enums import TemplateFormat
@@ -34,19 +33,51 @@ class TemplateRenderer:
         source_url: str = "",
         city: str = "",
         author: str = "",
+        emoji: str = "",
         published_at: datetime | None = None,
+        link: str = "",
     ) -> str:
-        """Return the fully rendered publication text."""
-        link = template.subscribe_link or source_url or ""
+        """Return the fully rendered publication text.
+
+        ``link`` is the subscribe link resolved for the *city* the post belongs
+        to (its Telegram channel). It wins over the template's static
+        ``subscribe_link`` so one shared template can be reused by every city
+        and still link to the right channel.
+        """
+        link = link or template.subscribe_link or source_url or ""
         date_str = (published_at or datetime.now()).strftime("%d.%m.%Y %H:%M")
+
+        if getattr(template, "uppercase_title", False) and title:
+            title = title.upper()
+
+        # Premium custom emoji as a Telegram <tg-emoji> tag.
+        #
+        # Telegram requires the tag to wrap a real emoji character: clients that
+        # cannot show the premium emoji display that character instead. The
+        # custom emoji is independent of {emoji} (the per-post accent), so a
+        # neutral placeholder is used and Telegram substitutes the premium art.
+        custom_emoji = ""
+        if template.custom_emoji_id:
+            custom_emoji = (
+                f'<tg-emoji emoji-id="{template.custom_emoji_id}">👉</tg-emoji>'
+            )
+
+        # {source} becomes a hyperlink to the original publication when a URL is
+        # known, so the link lives inside the post itself.
+        source_rendered = self._prepare(source, template.format)
+        if source_rendered and source_url:
+            source_rendered = f'<a href="{source_url}">{source_rendered}</a>'
 
         variables = _SafeDict(
             title=self._prepare(title, template.format),
             text=self._prepare(text, template.format),
-            source=self._prepare(source, template.format),
+            source=source_rendered,
+            source_plain=self._prepare(source, template.format),
             source_url=source_url,
             city=self._prepare(city, template.format),
             author=self._prepare(author, template.format),
+            emoji=emoji or "",
+            custom_emoji=custom_emoji,
             date=date_str,
             link=link,
             footer="",
@@ -73,6 +104,10 @@ class TemplateRenderer:
         """
         import re
 
+        # Normalise <br> variants to real newlines first, so label lines can be
+        # detected even when a template uses <br> as its separator.
+        text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+
         cleaned_lines: list[str] = []
         # A line is dropped if, after stripping HTML tags, it is a label ending
         # with ':' and nothing meaningful after it.
@@ -87,14 +122,14 @@ class TemplateRenderer:
 
     @staticmethod
     def _prepare(value: str, fmt: TemplateFormat) -> str:
-        """Escape a raw dynamic value according to the template format.
+        """Prepare a dynamic value for insertion into the template.
 
-        The AI output may already contain intended HTML tags for Telegram, so
-        for the Telegram-HTML format we do *not* escape (the AI is instructed to
-        emit only safe tags). For plain HTML we escape to avoid injection.
+        All rendered output is destined for Telegram with ``parse_mode=HTML``,
+        and unsafe tags are stripped later by
+        :func:`shared.services.html_sanitizer.sanitize_telegram_html`.
+        Therefore we must NOT HTML-escape the values here — doing so would turn
+        intended markup like ``<b>`` into literal text.
         """
         if value is None:
             return ""
-        if fmt == TemplateFormat.HTML:
-            return html.escape(value)
         return value

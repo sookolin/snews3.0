@@ -17,7 +17,7 @@ from shared.enums import NewsStatus, Permission
 from shared.i18n import t
 from shared.logging import get_logger
 from shared.models.news import News
-from shared.security import has_permission
+from shared.security import user_has_permission
 from shared.services.user_service import UserService
 
 router = Router(name="moderation")
@@ -30,7 +30,7 @@ async def _authorized(telegram_id: int) -> tuple[bool, str]:
         user = await UserService(session).get_by_telegram_id(telegram_id)
         if user is None or not user.is_active:
             return False, "ru"
-        return has_permission(user.role, Permission.NEWS_MODERATE), user.language
+        return user_has_permission(user, Permission.NEWS_MODERATE), user.language
 
 
 @router.callback_query(F.data.startswith("mod:"))
@@ -54,40 +54,113 @@ async def handle_moderation(callback: CallbackQuery) -> None:
 
     if action == "approve":
         await _approve(callback, news_id, lang)
+    elif action == "now":
+        await _approve(callback, news_id, lang, immediately=True)
+    elif action == "all":
+        await _approve(callback, news_id, lang, all_cities=True)
     elif action == "reject":
         await _reject(callback, news_id, lang)
     elif action == "spoiler":
         await _toggle_spoiler(callback, news_id, lang)
+    elif action == "delete":
+        await _delete(callback, news_id, lang)
+    elif action == "purge":
+        await _delete(callback, news_id, lang, purge=True)
+    elif action == "unpublish":
+        await _unpublish(callback, news_id, lang)
     elif action == "edit":
-        await callback.answer("Открыть карточку в админке для редактирования.", show_alert=False)
+        await callback.answer("Откройте карточку в админке для редактирования.", show_alert=False)
     else:
         await callback.answer()
 
 
-async def _approve(callback: CallbackQuery, news_id: int, lang: str) -> None:
+async def _approve(
+    callback: CallbackQuery,
+    news_id: int,
+    lang: str,
+    *,
+    immediately: bool = False,
+    all_cities: bool = False,
+) -> None:
+    """Approve and queue publication.
+
+    ``immediately`` skips the publication queue; ``all_cities`` publishes the
+    same item to the channels of every active city.
+    """
+    from datetime import datetime, timezone
+
+    who = "—"
+    slot = "immediate"
     async with session_scope() as session:
         news = await session.get(News, news_id)
         if news is None:
-            await callback.answer("Not found", show_alert=True)
+            await callback.answer("Новость не найдена", show_alert=True)
             return
+        if news.published_message_ids:
+            await callback.answer("Новость уже опубликована", show_alert=True)
+            return
+
         user = await UserService(session).get_by_telegram_id(callback.from_user.id)
         news.status = NewsStatus.APPROVED
         news.moderated_by = user.id if user else None
+        news.processed_at = datetime.now(timezone.utc)
+        if immediately:
+            news.publish_immediately = True
+        if user:
+            who = user.full_name or user.email
+
+        try:
+            from workers.tasks import _schedule_publication
+
+            slot = await _schedule_publication(session, news)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("publish_enqueue_failed", news=news_id, error=str(exc))
         await session.commit()
 
-    # Enqueue publication via the worker queue (decoupled from the bot process).
-    try:
-        from workers.tasks import publish_news
+    if all_cities:
+        try:
+            from workers.tasks import publish_news_all_cities
 
-        publish_news.delay(news_id)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("publish_enqueue_failed", news=news_id, error=str(exc))
+            publish_news_all_cities.delay(news_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("publish_all_failed", news=news_id, error=str(exc))
 
     await callback.answer(t("moderation.approved", lang))
-    await _mark_card(callback, "✅ " + t("moderation.approved", lang))
+    suffix = "" if slot == "immediate" else f" · в очереди на {slot}"
+    scope = " · во все каналы" if all_cities else ""
+    await _mark_card(callback, f"✅ {t('moderation.approved', lang)} · {who}{suffix}{scope}")
+
+
+async def _unpublish(callback: CallbackQuery, news_id: int, lang: str) -> None:
+    """Withdraw a published post from the channels, keeping it in the panel."""
+    who = "—"
+    removed = 0
+    async with session_scope() as session:
+        news = await session.get(News, news_id)
+        if news is None:
+            await callback.answer("Новость не найдена", show_alert=True)
+            return
+        from shared.services.news_moderation import NewsModerationService
+
+        user = await UserService(session).get_by_telegram_id(callback.from_user.id)
+        if user:
+            who = user.full_name or user.email
+        removed = await NewsModerationService(session).delete_published(news)
+        # WITHDRAWN records that the post was live and is now taken down; the
+        # card keeps its buttons so it can be published again.
+        news.status = NewsStatus.WITHDRAWN
+        if user:
+            news.moderated_by = user.id
+        await session.commit()
+
+    await callback.answer(f"Публикация снята ({removed})")
+    await _mark_card(
+        callback, f"↩️ Публикация снята · {who} — можно опубликовать заново", keep_buttons=True
+    )
 
 
 async def _reject(callback: CallbackQuery, news_id: int, lang: str) -> None:
+    who = "—"
     async with session_scope() as session:
         news = await session.get(News, news_id)
         if news is None:
@@ -96,9 +169,34 @@ async def _reject(callback: CallbackQuery, news_id: int, lang: str) -> None:
         user = await UserService(session).get_by_telegram_id(callback.from_user.id)
         news.status = NewsStatus.REJECTED
         news.moderated_by = user.id if user else None
+        if user:
+            who = user.full_name or user.email
         await session.commit()
     await callback.answer(t("moderation.rejected", lang))
-    await _mark_card(callback, "❌ " + t("moderation.rejected", lang))
+    await _mark_card(callback, f"❌ {t('moderation.rejected', lang)} · {who}")
+
+
+async def _delete(
+    callback: CallbackQuery, news_id: int, lang: str, *, purge: bool = False
+) -> None:
+    """Delete the news everywhere: channels, admin panel and (visually) the card."""
+    who = "—"
+    async with session_scope() as session:
+        news = await session.get(News, news_id)
+        if news is not None:
+            from shared.services.news_moderation import NewsModerationService
+
+            user = await UserService(session).get_by_telegram_id(callback.from_user.id)
+            if user:
+                who = user.full_name or user.email
+            # Remove already published messages from the channels first.
+            await NewsModerationService(session).delete_published(news)
+            await session.delete(news)
+            await session.commit()
+
+    await callback.answer(t("moderation.deleted", lang))
+    label = "🗑 Удалено полностью" if purge else f"🗑 {t('moderation.deleted', lang)}"
+    await _mark_card(callback, f"{label} · {who}")
 
 
 async def _toggle_spoiler(callback: CallbackQuery, news_id: int, lang: str) -> None:
@@ -113,13 +211,53 @@ async def _toggle_spoiler(callback: CallbackQuery, news_id: int, lang: str) -> N
     await callback.answer(f"{t('moderation.spoiler', lang)}: {state}")
 
 
-async def _mark_card(callback: CallbackQuery, suffix: str) -> None:
-    """Append a status line to the moderation card and drop the keyboard."""
-    if callback.message is None:
+async def _mark_card(
+    callback: CallbackQuery, suffix: str, *, keep_buttons: bool = False
+) -> None:
+    """Refresh the card after a decision, showing the current status.
+
+    The card is rebuilt from the fresh news state (same renderer the site uses),
+    so its status tags — including "изменено" and "отозвано" — always match the
+    admin panel. Falls back to appending the status line if the rebuild fails.
+    """
+    message = callback.message
+    if message is None:
         return
+
+    news_id: int | None = None
+    with contextlib.suppress(Exception):
+        news_id = int((callback.data or "").split(":")[-1])
+
+    # Preferred path: rebuild the whole card through the shared service.
+    if news_id is not None:
+        with contextlib.suppress(Exception):
+            async with session_scope() as session:
+                news = await session.get(News, news_id)
+                if news is not None:
+                    from shared.services.news_moderation import NewsModerationService
+
+                    if await NewsModerationService(session).update_card(
+                        news, status_line=suffix, keep_buttons=keep_buttons
+                    ):
+                        return
+
+    keyboard = None
+    if keep_buttons and news_id is not None:
+        with contextlib.suppress(Exception):
+            async with session_scope() as session:
+                news = await session.get(News, news_id)
+                if news is not None:
+                    from shared.services.telegram_admin import TelegramAdminService
+
+                    keyboard = TelegramAdminService().build_moderation_keyboard(news)
+
+    existing = message.html_text if message.text else (message.caption or "")
+    new_text = f"{existing}\n\n{suffix}"
     try:
-        text = (callback.message.html_text or callback.message.text or "") + f"\n\n{suffix}"
-        await callback.message.edit_text(text, reply_markup=None)
+        if message.text:
+            await message.edit_text(new_text, reply_markup=keyboard)
+        else:
+            await message.edit_caption(caption=new_text[:1024], reply_markup=keyboard)
     except Exception:  # noqa: BLE001
         with contextlib.suppress(Exception):
-            await callback.message.edit_reply_markup(reply_markup=None)
+            await message.edit_reply_markup(reply_markup=keyboard)

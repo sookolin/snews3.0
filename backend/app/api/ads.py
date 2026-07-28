@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from backend.app.deps import DBSession, require_permission
 from shared.enums import AdStatus, Permission
-from shared.exceptions import NotFoundError, PublishError
+from shared.exceptions import NotFoundError
 from shared.models.ad import Ad
-from shared.models.channel import Channel
 from shared.models.user import User
 from shared.schemas.ad import AdCreate, AdOut, AdStats, AdUpdate
 from shared.schemas.common import Message, Page, PaginationParams
@@ -112,59 +110,125 @@ async def delete_ad(
     return Message(detail="Ad deleted")
 
 
+class AdRenderRequest(BaseModel):
+    """Unsaved ad values so the preview matches the final post exactly."""
+
+    heading: str | None = None
+    text: str | None = None
+    advertiser: str | None = None
+    advertiser_inn: str | None = None
+    erid: str | None = None
+    template_id: int | None = None
+
+
+@router.post("/render", response_model=Message)
+async def render_ad_preview(
+    payload: AdRenderRequest,
+    session: DBSession,
+    _: User = Depends(require_permission(_PERM)),
+) -> Message:
+    """Render ad text through the chosen template + legal marking."""
+    from shared.models.template import Template
+    from shared.services.template_renderer import TemplateRenderer
+
+    text = payload.text or ""
+    if payload.template_id:
+        template = await session.get(Template, payload.template_id)
+        if template:
+            text = TemplateRenderer().render(
+                template,
+                title=payload.heading or "",
+                text=payload.text or "",
+                source=payload.advertiser or "",
+                city="",
+            )
+    elif payload.heading:
+        text = f"<b>{payload.heading}</b>\n\n{text}"
+
+    marking: list[str] = []
+    if payload.advertiser:
+        marking.append(f"Реклама. {payload.advertiser}")
+    if payload.advertiser_inn:
+        marking.append(f"ИНН {payload.advertiser_inn}")
+    if payload.erid:
+        marking.append(f"erid: {payload.erid}")
+    if marking:
+        text = f"{text}\n\n<i>{' · '.join(marking)}</i>"
+    return Message(detail=text)
+
+
+@router.get("/r/{ad_id}", include_in_schema=True)
+async def track_click(ad_id: int, session: DBSession, to: str = ""):  # type: ignore[no-untyped-def]
+    """Public click-tracking redirect.
+
+    Telegram does not report clicks on inline URL buttons, so to measure them
+    the button URL must point here; we increment the counter and then redirect
+    the user to the real destination.
+
+    Example button URL::
+
+        https://your-domain/api/v1/ads/r/12?to=https%3A%2F%2Fadvertiser.example
+    """
+    from fastapi.responses import RedirectResponse
+
+    ad = await session.get(Ad, ad_id)
+    if ad is not None:
+        ad.clicks = (ad.clicks or 0) + 1
+        await session.flush()
+    target = to or "https://t.me"
+    return RedirectResponse(url=target, status_code=307)
+
+
+@router.post("/{ad_id}/impression", response_model=Message)
+async def register_impression(ad_id: int, session: DBSession) -> Message:
+    """Register an impression (called by external counters/pixels)."""
+    ad = await session.get(Ad, ad_id)
+    if ad is None:
+        raise NotFoundError(f"Ad {ad_id} not found")
+    ad.impressions = (ad.impressions or 0) + 1
+    await session.flush()
+    return Message(detail="ok")
+
+
+@router.post("/{ad_id}/media", response_model=AdOut)
+async def upload_ad_media(
+    ad_id: int,
+    session: DBSession,
+    file: UploadFile = File(...),
+    _: User = Depends(require_permission(_PERM)),
+) -> AdOut:
+    """Attach an uploaded media file (from device) to an ad."""
+    import os
+    import uuid
+
+    from shared.config import settings
+    from shared.services.media_service import MediaService
+
+    ad = await CRUDService(session, Ad).get_or_404(ad_id)
+    contents = await file.read()
+    subdir = os.path.join("ads", str(ad_id))
+    os.makedirs(os.path.join(settings.media_root, subdir), exist_ok=True)
+    ext = os.path.splitext(file.filename or "file")[1] or ".bin"
+    rel_path = os.path.join(subdir, f"{uuid.uuid4().hex}{ext}")
+    with open(os.path.join(settings.media_root, rel_path), "wb") as fh:
+        fh.write(contents)
+    mtype = MediaService.guess_type(file.content_type, file.filename or rel_path)
+    files = list(ad.media_files or [])
+    files.append({"path": rel_path, "type": mtype.value})
+    ad.media_files = files
+    await session.flush()
+    await session.refresh(ad)
+    return AdOut.model_validate(ad)
+
+
 @router.post("/{ad_id}/publish", response_model=AdOut)
 async def publish_ad(
     ad_id: int,
     session: DBSession,
     _: User = Depends(require_permission(Permission.NEWS_PUBLISH)),
 ) -> AdOut:
-    """Publish an ad to its target channel."""
-    ad = await session.get(Ad, ad_id)
-    if ad is None:
-        raise NotFoundError(f"Ad {ad_id} not found")
-    if ad.channel_id is None:
-        raise PublishError("Ad has no target channel")
-    channel = await session.get(Channel, ad.channel_id)
-    if channel is None:
-        raise PublishError("Target channel not found")
+    """Publish an ad to its target channel (template, media, geo, erid marking)."""
+    from shared.services.ad_publisher import AdPublisherService
 
-    from shared.enums import MediaType
-    from shared.models.media import MediaAsset
-    from shared.plugins.publishers import PublishRequest, publisher_registry
-
-    # Build transient media assets from media_urls.
-    media = [
-        MediaAsset(
-            id=-(i + 1),
-            news_id=0,
-            type=MediaType.PHOTO,
-            remote_url=url,
-            position=i,
-            is_enabled=True,
-            is_spoiler=False,
-        )
-        for i, url in enumerate(ad.media_urls or [])
-    ]
-
-    publisher = publisher_registry.get("telegram")(channel)
-    result = await publisher.publish(
-        PublishRequest(
-            text=ad.text,
-            media=media,
-            is_spoiler=ad.is_spoiler,
-            buttons=ad.buttons or [],
-        )
-    )
-    if result.success:
-        ad.status = AdStatus.PUBLISHED
-        ad.published_at = datetime.now(timezone.utc)
-        ad.published_message_ids = {channel.chat_id: result.message_ids}
-        ad.error = None
-    else:
-        ad.status = AdStatus.FAILED
-        ad.error = result.error
-    await session.flush()
-    await session.refresh(ad)
-    if not result.success:
-        raise PublishError(ad.error or "Ad publish failed")
+    ad = await AdPublisherService(session).publish(ad_id)
     return AdOut.model_validate(ad)

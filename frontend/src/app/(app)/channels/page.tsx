@@ -4,6 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import { api, fetcher } from "@/lib/api";
 import type { City, Page } from "@/lib/types";
+import { Pencil, RefreshCw, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal, Field } from "@/components/Modal";
 
@@ -74,6 +75,19 @@ export default function ChannelsPage() {
     mutate();
   };
 
+  /**
+   * Pull the real title/@username/avatar from Telegram, so previews show the
+   * actual channel identity instead of hand-typed values.
+   */
+  const sync = async (id: number) => {
+    try {
+      await api(`/channels/${id}/sync`, { method: "POST" });
+      mutate();
+    } catch (e) {
+      alert((e as Error).message);
+    }
+  };
+
   return (
     <div>
       <PageHeader
@@ -88,6 +102,7 @@ export default function ChannelsPage() {
       )}
 
       <div className="card overflow-hidden">
+        <div className="table-wrap">
         <table className="w-full text-sm">
           <thead className="bg-muted text-left text-muted-foreground">
             <tr>
@@ -109,8 +124,19 @@ export default function ChannelsPage() {
                 <td className="px-4 py-3">{c.is_active ? "Да" : "Нет"}</td>
                 <td className="px-4 py-3">
                   <div className="flex justify-end gap-2">
-                    <button className="btn-outline py-1" onClick={() => openEdit(c)}>Изменить</button>
-                    <button className="btn-danger py-1" onClick={() => remove(c.id)}>Удалить</button>
+                    <button className="btn-icon" title="Изменить" onClick={() => openEdit(c)}>
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      className="btn-icon-primary"
+                      title="Обновить название и аватарку из Telegram"
+                      onClick={() => sync(c.id)}
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                    </button>
+                    <button className="btn-icon-danger" title="Удалить" onClick={() => remove(c.id)}>
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -120,6 +146,7 @@ export default function ChannelsPage() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
       <Modal open={!!form} onClose={() => setForm(null)} title={form?.id ? "Изменить канал" : "Привязать канал к городу"}>
@@ -137,10 +164,10 @@ export default function ChannelsPage() {
               <input className="input font-mono" value={form.chat_id ?? ""} onChange={(e) => upd({ chat_id: e.target.value })} />
             </Field>
             <div className="grid grid-cols-2 gap-4">
-              <Field label="@username" hint="Для ссылки в предпросмотре">
+              <Field label="@username" hint="Заполняется кнопкой обновления из Telegram">
                 <input className="input" value={form.username ?? ""} onChange={(e) => upd({ username: e.target.value })} />
               </Field>
-              <Field label="URL аватарки" hint="Показывается в предпросмотре">
+              <Field label="URL аватарки" hint="Берётся из Telegram; можно переопределить вручную">
                 <input className="input" value={form.avatar_url ?? ""} onChange={(e) => upd({ avatar_url: e.target.value })} />
               </Field>
             </div>

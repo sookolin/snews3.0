@@ -43,6 +43,16 @@ class NewsUpdate(BaseModel):
     location_title: str | None = None
     location_address: str | None = None
     buttons: list | None = None
+    author_name: str | None = None
+    submitted_anonymously: bool | None = None
+    emoji: str | None = None
+    source_id: int | None = None
+    source_name: str | None = None
+    hide_source: bool | None = None
+    source_url_override: str | None = None
+    publish_immediately: bool | None = None
+    is_edited: bool | None = None
+    is_world_news: bool | None = None
 
 
 class NewsListItem(ORMModel):
@@ -57,6 +67,20 @@ class NewsListItem(ORMModel):
     is_spoiler: bool
     author_name: str | None
     submitted_anonymously: bool
+    moderated_by: int | None
+    template_id: int | None
+    emoji: str | None
+    #: Set when the item came from the Telegram submission bot.
+    submitted_by_telegram_id: int | None
+    #: Extra state flags shown as additional tags next to the status.
+    is_edited: bool
+    is_world_news: bool
+    #: Non-empty when the post is currently live in a channel.
+    published_message_ids: dict
+    #: Attachments, used for the hover preview in the news table.
+    media: list[MediaOut]
+    source_published_at: datetime | None
+    processed_at: datetime | None
     scheduled_at: datetime | None
     published_at: datetime | None
     created_at: datetime
@@ -87,6 +111,17 @@ class NewsOut(ORMModel):
     location_title: str | None
     location_address: str | None
     buttons: list
+    emoji: str | None
+    source_name: str | None
+    hide_source: bool
+    source_url_override: str | None
+    source_published_at: datetime | None
+    processed_at: datetime | None
+    ai_processed_at: datetime | None
+    publish_immediately: bool
+    is_edited: bool
+    is_world_news: bool
+    reply_to_news_id: int | None
     submitted_by_telegram_id: int | None
     submitted_anonymously: bool
     author_name: str | None

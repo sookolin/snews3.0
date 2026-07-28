@@ -1,33 +1,132 @@
+import type { LucideIcon } from "lucide-react";
+import {
+  AlertTriangle,
+  Clock,
+  Loader2,
+  Pencil,
+  Send,
+  Timer,
+  Undo2,
+  XCircle,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const STATUS_STYLES: Record<string, string> = {
-  new: "bg-slate-100 text-slate-700",
-  processing: "bg-blue-100 text-blue-700",
-  pending: "bg-amber-100 text-amber-800",
-  approved: "bg-emerald-100 text-emerald-700",
-  rejected: "bg-red-100 text-red-700",
-  scheduled: "bg-violet-100 text-violet-700",
-  published: "bg-green-100 text-green-700",
-  failed: "bg-red-100 text-red-700",
-  duplicate: "bg-gray-100 text-gray-600",
+/**
+ * News lifecycle statuses, mirroring `shared.enums.NewsStatus`.
+ *
+ * processing → pending → approved (cleared, waiting for its publication slot)
+ * or scheduled (queued for a set time) → published (live in the channel).
+ * withdrawn = was live and taken down (can go out again).
+ * rejected / failed are terminal.
+ */
+const STATUS_META: Record<string, { label: string; icon: LucideIcon; className: string }> = {
+  processing: {
+    label: "Обработка",
+    icon: Loader2,
+    className:
+      "bg-blue-50 text-blue-700 ring-blue-200 dark:bg-blue-950/50 dark:text-blue-300 dark:ring-blue-900",
+  },
+  pending: {
+    label: "На модерации",
+    icon: Clock,
+    className:
+      "bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:ring-amber-900",
+  },
+  approved: {
+    label: "В очереди",
+    icon: Timer,
+    className:
+      "bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:ring-emerald-900",
+  },
+  scheduled: {
+    label: "Запланирована",
+    icon: Timer,
+    className:
+      "bg-violet-50 text-violet-700 ring-violet-200 dark:bg-violet-950/50 dark:text-violet-300 dark:ring-violet-900",
+  },
+  published: {
+    label: "Опубликована",
+    icon: Send,
+    className:
+      "bg-green-50 text-green-700 ring-green-200 dark:bg-green-950/50 dark:text-green-300 dark:ring-green-900",
+  },
+  withdrawn: {
+    label: "Отозвана",
+    icon: Undo2,
+    className:
+      "bg-orange-50 text-orange-700 ring-orange-200 dark:bg-orange-950/50 dark:text-orange-300 dark:ring-orange-900",
+  },
+  rejected: {
+    label: "Отклонена",
+    icon: XCircle,
+    className:
+      "bg-rose-50 text-rose-700 ring-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:ring-rose-900",
+  },
+  failed: {
+    label: "Ошибка",
+    icon: AlertTriangle,
+    className:
+      "bg-rose-50 text-rose-700 ring-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:ring-rose-900",
+  },
 };
 
-export const STATUS_LABELS: Record<string, string> = {
-  new: "Новая",
-  processing: "Обработка",
-  pending: "На модерации",
-  approved: "Одобрена",
-  rejected: "Отклонена",
-  scheduled: "Запланирована",
-  published: "Опубликована",
-  failed: "Ошибка",
-  duplicate: "Дубликат",
-};
+/** Statuses offered in filter dropdowns, in lifecycle order. */
+export const STATUS_ORDER = [
+  "processing",
+  "pending",
+  "approved",
+  "scheduled",
+  "published",
+  "withdrawn",
+  "rejected",
+  "failed",
+];
 
+export const STATUS_LABELS: Record<string, string> = Object.fromEntries(
+  Object.entries(STATUS_META).map(([key, meta]) => [key, meta.label])
+);
+
+/** Compact status pill: coloured icon + label. */
 export function StatusBadge({ status }: { status: string }) {
+  const meta = STATUS_META[status];
+  const Icon = meta?.icon;
   return (
-    <span className={cn("badge", STATUS_STYLES[status] ?? "bg-slate-100 text-slate-700")}>
-      {STATUS_LABELS[status] ?? status}
+    <span
+      className={cn(
+        "badge gap-1 whitespace-nowrap",
+        meta?.className ?? "bg-slate-50 text-slate-700 ring-slate-200"
+      )}
+    >
+      {Icon && <Icon className="h-3 w-3 shrink-0" />}
+      {meta?.label ?? status}
+    </span>
+  );
+}
+
+/**
+ * Extra state tag rendered under the status: "изменено" for a published post
+ * edited afterwards, "отозвано" for one removed from the channel.
+ */
+export function StateTag({ kind }: { kind: "edited" | "withdrawn" }) {
+  const map = {
+    edited: {
+      label: "Изменено",
+      icon: Pencil,
+      className:
+        "bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:ring-sky-900",
+    },
+    withdrawn: {
+      label: "Отозвано",
+      icon: Undo2,
+      className:
+        "bg-orange-50 text-orange-700 ring-orange-200 dark:bg-orange-950/50 dark:text-orange-300 dark:ring-orange-900",
+    },
+  }[kind];
+  const Icon = map.icon;
+  return (
+    <span className={cn("badge gap-1 whitespace-nowrap", map.className)}>
+      <Icon className="h-3 w-3 shrink-0" />
+      {map.label}
     </span>
   );
 }

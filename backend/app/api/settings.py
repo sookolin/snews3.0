@@ -47,6 +47,30 @@ async def set_setting(
     return SettingOut.model_validate(obj)
 
 
+@router.post("/world-topic", response_model=dict)
+async def create_world_topic(
+    session: DBSession,
+    _: User = Depends(require_permission(Permission.SETTINGS_MANAGE)),
+) -> dict:
+    """Create the dedicated moderation topic for world news (like a city topic).
+
+    Stores the new thread id in ``telegram.world_topic_id`` so world news are
+    routed there instead of a city topic.
+    """
+    from shared.exceptions import ExternalServiceError
+    from shared.services.telegram_admin import TelegramAdminService
+
+    topic_id = await TelegramAdminService().create_topic("🌍 Мировые новости")
+    if topic_id is None:
+        raise ExternalServiceError(
+            "Не удалось создать топик. Проверьте, что группа модерации — форум "
+            "и бот в ней администратор."
+        )
+    service = SettingsService(session)
+    await service.set("telegram.world_topic_id", topic_id, category="telegram")
+    return {"topic_id": topic_id}
+
+
 @router.get("/audit/logs", response_model=Page[dict])
 async def audit_logs(
     session: DBSession,

@@ -27,6 +27,19 @@ _TELEGRAM_CAPTION_LIMIT = 1024
 _TELEGRAM_TEXT_LIMIT = 4096
 
 
+def strip_custom_emoji(text: str) -> str:
+    """Replace ``<tg-emoji …>X</tg-emoji>`` with its fallback character ``X``.
+
+    Telegram only lets a bot send premium custom emoji under extra conditions
+    (the emoji must be available to the bot's account). When the API rejects the
+    entity the whole post would fail, so we retry with the plain fallback
+    character instead of losing the publication.
+    """
+    import re
+
+    return re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text, flags=re.IGNORECASE | re.DOTALL)
+
+
 @publisher_registry.register("telegram")
 class TelegramPublisher(BasePublisher):
     """Publish a news item to a Telegram channel/chat/topic."""
@@ -116,15 +129,25 @@ class TelegramPublisher(BasePublisher):
             return URLInputFile(media.remote_url)
         raise PublishError(f"Media {media.id} has no usable source")
 
-    async def publish(self, request: PublishRequest) -> PublishResult:  # noqa: C901
+    async def publish(self, request: PublishRequest) -> PublishResult:
+        """Publish the post, retrying without premium emoji if Telegram objects.
+
+        A ``<tg-emoji>`` entity the bot may not use makes the whole send fail.
+        Rather than lose the post, the text is retried with the emoji's fallback
+        character.
+        """
+        result = await self._publish(request)
+        if not result.success and "<tg-emoji" in (request.text or ""):
+            log.warning(
+                "retry_without_custom_emoji", channel=self.channel.id, error=result.error
+            )
+            request.text = strip_custom_emoji(request.text)
+            result = await self._publish(request)
+        return result
+
+    async def _publish(self, request: PublishRequest) -> PublishResult:  # noqa: C901
         from aiogram import Bot
         from aiogram.enums import ParseMode
-        from aiogram.types import (
-            InputMediaAudio,
-            InputMediaDocument,
-            InputMediaPhoto,
-            InputMediaVideo,
-        )
 
         if not settings.telegram_bot_token:
             return PublishResult(success=False, error="Bot token not configured")
@@ -135,6 +158,8 @@ class TelegramPublisher(BasePublisher):
         common: dict = {"chat_id": chat_id}
         if self.channel.topic_id:
             common["message_thread_id"] = self.channel.topic_id
+        if request.reply_to_message_id:
+            common["reply_to_message_id"] = request.reply_to_message_id
 
         from shared.services.html_sanitizer import sanitize_telegram_html
 
@@ -160,15 +185,31 @@ class TelegramPublisher(BasePublisher):
                 # Photos+videos may share one album; documents, audio, and
                 # single-only types (voice, video_note, animation) go separately.
                 groups = self._split_media_groups(enabled_media)
+
+                # A caption over Telegram's 1024-char limit would be truncated,
+                # cutting off the footer (subscribe link, custom emoji). In that
+                # case send the media without a caption and the full text as a
+                # separate message so nothing is lost.
+                caption_fits = len(text) <= _TELEGRAM_CAPTION_LIMIT
                 caption_used = False
                 for group in groups:
-                    caption = None if caption_used else text
+                    caption = None if (caption_used or not caption_fits) else text
                     ids = await self._send_group(
                         bot, group, caption, common,
-                        keyboard if not caption_used else None,
+                        keyboard if (not caption_used and caption_fits) else None,
                     )
                     message_ids.extend(ids)
                     caption_used = True
+
+                if not caption_fits:
+                    msg = await bot.send_message(
+                        text=text,
+                        parse_mode=ParseMode.HTML,
+                        disable_web_page_preview=request.disable_web_preview,
+                        reply_markup=keyboard,
+                        **common,
+                    )
+                    message_ids.append(msg.message_id)
 
             # ── Optional geolocation as a follow-up message ──────────────────
             if request.latitude is not None and request.longitude is not None:
@@ -243,7 +284,12 @@ class TelegramPublisher(BasePublisher):
             media = group[0]
             file = self._input_file(media)
             spoiler = bool(media.is_spoiler)
-            kwargs = {"caption": cap, "parse_mode": ParseMode.HTML, "reply_markup": keyboard, **common}
+            kwargs = {
+                "caption": cap,
+                "parse_mode": ParseMode.HTML,
+                "reply_markup": keyboard,
+                **common,
+            }
             if media.type == MediaType.PHOTO:
                 msg = await bot.send_photo(photo=file, has_spoiler=spoiler, **kwargs)
             elif media.type == MediaType.VIDEO:
@@ -256,7 +302,9 @@ class TelegramPublisher(BasePublisher):
                 msg = await bot.send_voice(voice=file, caption=cap, parse_mode=ParseMode.HTML,
                                            reply_markup=keyboard, **common)
             elif media.type == MediaType.VIDEO_NOTE:
-                msg = await bot.send_video_note(video_note=file, reply_markup=keyboard, **common)
+                msg = await bot.send_video_note(
+                    video_note=file, reply_markup=keyboard, **common
+                )
             else:
                 msg = await bot.send_document(document=file, **kwargs)
             return [msg.message_id]

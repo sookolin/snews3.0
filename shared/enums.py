@@ -33,15 +33,23 @@ class ParserEngine(str, Enum):
 
 
 class NewsStatus(str, Enum):
-    NEW = "new"  # just discovered
-    PROCESSING = "processing"  # being handled by AI
-    PENDING = "pending"  # awaiting moderation
-    APPROVED = "approved"
+    """Lifecycle of a news item.
+
+    Flow: ``PROCESSING`` (AI rewriting) → ``PENDING`` (awaiting moderation) →
+    ``APPROVED`` (cleared, waiting for its publication slot) or ``SCHEDULED``
+    (queued for a specific time) → ``PUBLISHED`` (live in the channel).
+    ``WITHDRAWN`` means it was published and then taken down; it can be
+    published again. ``REJECTED`` and ``FAILED`` are terminal.
+    """
+
+    PROCESSING = "processing"    # being handled by AI
+    PENDING = "pending"          # awaiting moderation
+    APPROVED = "approved"        # approved, waiting for its publication slot
+    SCHEDULED = "scheduled"      # queued for a specific time
+    PUBLISHED = "published"      # live in the channel
+    WITHDRAWN = "withdrawn"      # was published, then removed from the channel
     REJECTED = "rejected"
-    SCHEDULED = "scheduled"
-    PUBLISHED = "published"
     FAILED = "failed"
-    DUPLICATE = "duplicate"
 
 
 class NewsOrigin(str, Enum):

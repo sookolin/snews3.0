@@ -2,10 +2,13 @@
 
 import { useState } from "react";
 import useSWR from "swr";
+import { Check, Copy, Pencil, Plus, Trash2, X } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
 import type { Page } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal, Field } from "@/components/Modal";
+import { EmojiPickerButton } from "@/components/EmojiPickerButton";
+import { Checkbox } from "@/components/Controls";
 
 interface Template {
   id: number;
@@ -19,47 +22,69 @@ interface Template {
   separator: string;
   custom_emoji_id?: string | null;
   subscribe_link?: string | null;
+  variables: Record<string, string>;
   disable_web_preview: boolean;
+  uppercase_title: boolean;
 }
 
 const EMPTY: Partial<Template> = {
   name: "",
   format: "telegram_html",
-  header: "🔥 <b>{title}</b>",
+  header: "{emoji} <b>{title}</b>",
   body: "{text}",
-  footer: 'Источник: {source}\n————————\n👉 <a href="{link}">Подписаться</a>',
+  footer: 'Источник: {source}\nАвтор: {author}\n————————\n👉 <a href="{link}">Подписаться</a>',
   separator: "\n\n",
   subscribe_link: "",
+  variables: {},
   is_default: false,
   is_active: true,
   disable_web_preview: true,
+  uppercase_title: false,
 };
 
-const PLACEHOLDERS = "{title} {text} {source} {source_url} {city} {date} {link}";
+const TAGS: { tag: string; desc: string }[] = [
+  { tag: "{title}", desc: "Заголовок новости (после AI)" },
+  { tag: "{text}", desc: "Основной текст новости" },
+  { tag: "{emoji}", desc: "Эмодзи, подобранный AI/редактором" },
+  { tag: "{custom_emoji}", desc: "Премиум-эмодзи по ID (tg-emoji), нужен Telegram Premium у владельца бота" },
+  { tag: "{source}", desc: "Название источника (пусто → строка скрывается)" },
+  { tag: "{source_url}", desc: "Ссылка на оригинал" },
+  { tag: "{author}", desc: "Автор (для предложенных; пусто → скрывается)" },
+  { tag: "{city}", desc: "Название города" },
+  { tag: "{date}", desc: "Дата/время публикации" },
+  {
+    tag: "{link}",
+    desc: "Ссылка подписки — подставляется автоматически по каналу города, в который идёт пост",
+  },
+];
+
+const HTML_TAGS = "<b>жирный</b> · <i>курсив</i> · <u>подчёркнутый</u> · <s>зачёркнутый</s> · <a href=\"URL\">ссылка</a> · <code>моно</code> · <tg-spoiler>спойлер</tg-spoiler>";
 
 export default function TemplatesPage() {
   const { data, mutate } = useSWR<Page<Template>>("/templates?size=100", fetcher);
   const [form, setForm] = useState<Partial<Template> | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [varKey, setVarKey] = useState("");
+  const [varVal, setVarVal] = useState("");
+  // Custom tag currently being edited (its original key), plus draft values.
+  const [editingVar, setEditingVar] = useState<string | null>(null);
+  const [editKey, setEditKey] = useState("");
+  const [editVal, setEditVal] = useState("");
 
-  const openNew = () => { setForm({ ...EMPTY }); setError(null); };
-  const openEdit = (t: Template) => { setForm({ ...t }); setError(null); };
+  const openNew = () => { setForm({ ...EMPTY }); setPreview(null); setError(null); setEditingVar(null); };
+  const openEdit = (t: Template) => { setForm({ ...t, variables: t.variables ?? {} }); setPreview(null); setError(null); setEditingVar(null); };
+  const upd = (patch: Partial<Template>) => setForm((f) => ({ ...f, ...patch }));
 
   const save = async () => {
     if (!form) return;
     setError(null);
     try {
-      if (form.id) {
-        await api(`/templates/${form.id}`, { method: "PATCH", body: JSON.stringify(form) });
-      } else {
-        await api("/templates", { method: "POST", body: JSON.stringify(form) });
-      }
+      if (form.id) await api(`/templates/${form.id}`, { method: "PATCH", body: JSON.stringify(form) });
+      else await api("/templates", { method: "POST", body: JSON.stringify(form) });
       setForm(null);
       mutate();
-    } catch (e) {
-      setError((e as Error).message);
-    }
+    } catch (e) { setError((e as Error).message); }
   };
 
   const doPreview = async () => {
@@ -74,14 +99,52 @@ export default function TemplatesPage() {
     mutate();
   };
 
-  const upd = (patch: Partial<Template>) => setForm((f) => ({ ...f, ...patch }));
+  /** Duplicate a template so a variant can be built without retyping it. */
+  const duplicate = async (id: number) => {
+    try {
+      const copy = await api<Template>(`/templates/${id}/duplicate`, { method: "POST" });
+      await mutate();
+      openEdit(copy);
+    } catch (e) {
+      alert((e as Error).message);
+    }
+  };
+
+  const addVar = () => {
+    if (!form || !varKey.trim()) return;
+    upd({ variables: { ...(form.variables ?? {}), [varKey.trim()]: varVal } });
+    setVarKey(""); setVarVal("");
+  };
+  const removeVar = (k: string) => {
+    if (!form) return;
+    const v = { ...(form.variables ?? {}) };
+    delete v[k];
+    upd({ variables: v });
+    if (editingVar === k) setEditingVar(null);
+  };
+
+  /** Start editing an existing custom tag (name and value are both editable). */
+  const startEditVar = (k: string, v: string) => {
+    setEditingVar(k);
+    setEditKey(k);
+    setEditVal(v);
+  };
+
+  /** Commit the edit, preserving tag order and renaming the key if needed. */
+  const commitEditVar = () => {
+    if (!form || editingVar === null) return;
+    const nextKey = editKey.trim();
+    if (!nextKey) return;
+    const entries = Object.entries(form.variables ?? {}).map(([k, v]) =>
+      k === editingVar ? ([nextKey, editVal] as const) : ([k, v] as const)
+    );
+    upd({ variables: Object.fromEntries(entries) });
+    setEditingVar(null);
+  };
 
   return (
     <div>
-      <PageHeader
-        title="Шаблоны"
-        action={<button className="btn-primary" onClick={openNew}>Создать шаблон</button>}
-      />
+      <PageHeader title="Шаблоны" action={<button className="btn-primary" onClick={openNew}>Создать шаблон</button>} />
 
       <div className="grid gap-4 md:grid-cols-2">
         {data?.items.map((t) => (
@@ -90,6 +153,7 @@ export default function TemplatesPage() {
               <h3 className="font-medium">{t.name}</h3>
               <div className="flex gap-1">
                 {t.is_default && <span className="badge bg-emerald-100 text-emerald-700">по умолчанию</span>}
+                {t.uppercase_title && <span className="badge bg-blue-100 text-blue-700">CAPS</span>}
                 {!t.is_active && <span className="badge bg-gray-100 text-gray-600">выключен</span>}
               </div>
             </div>
@@ -98,24 +162,39 @@ export default function TemplatesPage() {
               <div className="text-muted-foreground">{t.body}</div>
               <div>{t.footer}</div>
             </div>
-            <div className="mt-3 flex gap-2">
-              <button className="btn-outline py-1" onClick={() => openEdit(t)}>Редактировать</button>
-              <button className="btn-danger py-1" onClick={() => remove(t.id)}>Удалить</button>
+            <div className="mt-3 flex gap-1.5">
+              <button className="btn-icon" title="Редактировать" onClick={() => openEdit(t)}>
+                <Pencil className="h-4 w-4" />
+              </button>
+              <button className="btn-icon" title="Создать копию" onClick={() => duplicate(t.id)}>
+                <Copy className="h-4 w-4" />
+              </button>
+              <button className="btn-icon-danger" title="Удалить" onClick={() => remove(t.id)}>
+                <Trash2 className="h-4 w-4" />
+              </button>
             </div>
           </div>
         ))}
-        {data && data.items.length === 0 && (
-          <p className="text-muted-foreground">Шаблонов нет. Создайте первый.</p>
-        )}
+        {data && data.items.length === 0 && <p className="text-muted-foreground">Шаблонов нет. Создайте первый.</p>}
       </div>
 
       <Modal open={!!form} onClose={() => setForm(null)} title={form?.id ? "Редактировать шаблон" : "Новый шаблон"} wide>
         {form && (
           <div className="space-y-4">
-            {error && <p className="rounded-md bg-red-50 p-2 text-sm text-red-600">{error}</p>}
-            <p className="rounded-md bg-blue-50 p-2 text-xs text-blue-800">
-              Доступные плейсхолдеры: <span className="font-mono">{PLACEHOLDERS}</span>
-            </p>
+            {error && <p className="rounded-md bg-red-50 p-2 text-sm text-red-600 dark:bg-red-950/40">{error}</p>}
+
+            <div className="rounded-md bg-blue-50 p-3 text-xs text-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
+              <div className="mb-1 font-semibold">Доступные теги (плейсхолдеры):</div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+                {TAGS.map((t) => (
+                  <div key={t.tag}><span className="font-mono font-semibold">{t.tag}</span> — {t.desc}</div>
+                ))}
+              </div>
+              <div className="mt-2 font-semibold">HTML-теги Telegram:</div>
+              <div className="font-mono">{HTML_TAGS}</div>
+              <div className="mt-2">Свои теги можно добавить ниже — они станут доступны как <span className="font-mono">{"{имя}"}</span>.</div>
+            </div>
+
             <div className="grid grid-cols-2 gap-4">
               <Field label="Название"><input className="input" value={form.name ?? ""} onChange={(e) => upd({ name: e.target.value })} /></Field>
               <Field label="Формат">
@@ -126,36 +205,147 @@ export default function TemplatesPage() {
                 </select>
               </Field>
             </div>
-            <Field label="Заголовок (header)" hint="Верхняя строка публикации">
+
+            <Field label="Заголовок (header)" hint="Верхняя строка. Напр. {emoji} <b>{title}</b>">
               <textarea className="input font-mono" value={form.header ?? ""} onChange={(e) => upd({ header: e.target.value })} />
             </Field>
-            <Field label="Тело (body)" hint="Основной текст новости">
+            <Field label="Тело (body)">
               <textarea className="input min-h-[80px] font-mono" value={form.body ?? ""} onChange={(e) => upd({ body: e.target.value })} />
             </Field>
-            <Field label="Футер (footer)" hint="Нижняя часть: источник, подписка, разделители">
+            <Field label="Футер (footer)">
               <textarea className="input min-h-[80px] font-mono" value={form.footer ?? ""} onChange={(e) => upd({ footer: e.target.value })} />
             </Field>
+
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Разделитель" hint="Между header/body/footer (\n\n)">
+              <Field label="Разделитель" hint="Между header/body/footer">
                 <input className="input font-mono" value={form.separator ?? ""} onChange={(e) => upd({ separator: e.target.value })} />
               </Field>
-              <Field label="Ссылка подписки {link}">
+              <Field
+                label="Ссылка подписки {link}"
+                hint="Обычно не нужна: {link} сам берёт канал города. Заполните, чтобы жёстко задать ссылку."
+              >
                 <input className="input" value={form.subscribe_link ?? ""} onChange={(e) => upd({ subscribe_link: e.target.value })} />
               </Field>
             </div>
-            <Field label="ID кастомного эмодзи" hint="Опционально, для Telegram Premium эмодзи">
+
+            <Field label="ID премиум-эмодзи {custom_emoji}" hint="Число из документа Telegram; выводится тегом {custom_emoji}. Нужен Telegram Premium у владельца бота.">
               <input className="input" value={form.custom_emoji_id ?? ""} onChange={(e) => upd({ custom_emoji_id: e.target.value })} />
             </Field>
-            <div className="flex gap-6">
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={!!form.is_default} onChange={(e) => upd({ is_default: e.target.checked })} /> По умолчанию
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={form.is_active ?? true} onChange={(e) => upd({ is_active: e.target.checked })} /> Активен
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={form.disable_web_preview ?? true} onChange={(e) => upd({ disable_web_preview: e.target.checked })} /> Без превью ссылок
-              </label>
+
+
+
+            {/* Custom variables (own tags) */}
+            <div className="rounded-lg border border-border p-4">
+              <div className="mb-1 text-sm font-medium">Свои теги</div>
+              <p className="mb-3 text-xs text-muted-foreground">
+                Создайте тег с любым значением — в шаблоне он доступен как
+                <span className="mx-1 font-mono">{"{имя}"}</span>. Значением может быть
+                текст или эмодзи (выберите ниже).
+              </p>
+
+              {Object.keys(form.variables ?? {}).length > 0 && (
+                <div className="mb-3 space-y-1.5">
+                  {Object.entries(form.variables ?? {}).map(([k, v]) =>
+                    editingVar === k ? (
+                      <div
+                        key={k}
+                        className="flex flex-wrap items-center gap-2 rounded-md border border-primary/60 px-2.5 py-1.5 text-sm"
+                      >
+                        <input
+                          className="input h-8 w-[150px] font-mono"
+                          value={editKey}
+                          onChange={(e) => setEditKey(e.target.value)}
+                        />
+                        <span className="text-muted-foreground">=</span>
+                        <input
+                          className="input h-8 flex-1"
+                          value={editVal}
+                          onChange={(e) => setEditVal(e.target.value)}
+                        />
+                        <EmojiPickerButton
+                          onPick={(em) => setEditVal((x) => x + em)}
+                          className="h-8 w-8"
+                        />
+                        <button
+                          type="button"
+                          className="btn-icon-success h-8 w-8"
+                          title="Сохранить тег"
+                          onClick={commitEditVar}
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-icon h-8 w-8"
+                          title="Отменить"
+                          onClick={() => setEditingVar(null)}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div
+                        key={k}
+                        className="flex items-center gap-2 rounded-md border border-border/70 px-2.5 py-1.5 text-sm"
+                      >
+                        <span className="font-mono text-primary">{`{${k}}`}</span>
+                        <span className="text-muted-foreground">=</span>
+                        <span className="flex-1 truncate">{v}</span>
+                        <button
+                          type="button"
+                          className="btn-icon h-6 w-6"
+                          title="Редактировать тег"
+                          onClick={() => startEditVar(k, v)}
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-icon-danger h-6 w-6"
+                          title="Удалить тег"
+                          onClick={() => removeVar(k)}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Имя тега" hint="Латиницей, без пробелов">
+                  <input
+                    className="input"
+                    placeholder="subscribe_icon"
+                    value={varKey}
+                    onChange={(e) => setVarKey(e.target.value)}
+                  />
+                </Field>
+                <Field label="Значение" hint="Текст и/или эмодзи (кнопка добавляет к тексту)">
+                  <div className="flex gap-1">
+                    <input
+                      className="input"
+                      placeholder="текст или эмодзи"
+                      value={varVal}
+                      onChange={(e) => setVarVal(e.target.value)}
+                    />
+                    {/* Appends to the value instead of replacing it. */}
+                    <EmojiPickerButton onPick={(em) => setVarVal((v) => v + em)} />
+                  </div>
+                </Field>
+              </div>
+
+              <button type="button" className="btn-outline mt-3" onClick={addVar}>
+                <Plus className="h-4 w-4" /> Добавить тег
+              </button>
+            </div>
+
+            <div className="flex flex-wrap gap-x-6 gap-y-3">
+              <Checkbox checked={!!form.uppercase_title} onChange={(v) => upd({ uppercase_title: v })} label="Заголовок ЗАГЛАВНЫМИ" />
+              <Checkbox checked={!!form.is_default} onChange={(v) => upd({ is_default: v })} label="По умолчанию" />
+              <Checkbox checked={form.is_active ?? true} onChange={(v) => upd({ is_active: v })} label="Активен" />
+              <Checkbox checked={form.disable_web_preview ?? true} onChange={(v) => upd({ disable_web_preview: v })} label="Без превью ссылок" />
             </div>
 
             {preview && (

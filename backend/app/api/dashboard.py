@@ -112,7 +112,7 @@ async def dashboard_stats(
         pending=await count_status(NewsStatus.PENDING),
         rejected=await count_status(NewsStatus.REJECTED),
         failed=await count_status(NewsStatus.FAILED),
-        duplicates=await count_status(NewsStatus.DUPLICATE),
+        duplicates=0,  # duplicates are skipped at ingest, never stored
         total_cities=total_cities,
         active_sources=active_sources,
         total_sources=total_sources,

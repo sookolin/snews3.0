@@ -37,6 +37,7 @@ class CityUpdate(BaseModel):
     language: str | None = None
     is_active: bool | None = None
     template_id: int | None = None
+    telegram_topic_id: int | None = None
 
 
 class CityOut(ORMModel):

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 
 from backend.app.deps import ClientMeta, DBSession, require_permission
@@ -34,6 +35,10 @@ async def list_news(
     city_id: int | None = None,
     source_id: int | None = None,
     origin: str | None = None,
+    scope: str | None = Query(
+        default=None,
+        description="'world' → only world news, 'city' → only city news",
+    ),
     search: str | None = Query(default=None, description="Full-text search"),
     _: User = Depends(require_permission(Permission.NEWS_VIEW)),
 ) -> Page[NewsListItem]:
@@ -44,6 +49,10 @@ async def list_news(
     conditions = []
     if status:
         conditions.append(News.status == status)
+    if scope == "world":
+        conditions.append(News.is_world_news.is_(True))
+    elif scope == "city":
+        conditions.append(News.is_world_news.is_(False))
     if city_id:
         conditions.append(News.city_id == city_id)
     if source_id:
@@ -135,6 +144,12 @@ async def update_news(
     data = payload.model_dump(exclude_unset=True, exclude={"edit_comment"})
     for key, value in data.items():
         setattr(news, key, value)
+
+    # Editing content of an already published post marks it as "изменено" both
+    # in the panel and on the moderation card.
+    content_keys = {"title", "text", "emoji", "buttons", "source_name", "hide_source"}
+    if news.published_message_ids and content_keys & set(data):
+        news.is_edited = True
     await session.flush()
 
     await AuditService(session).log(
@@ -146,6 +161,20 @@ async def update_news(
         changes=data,
         **meta,
     )
+
+    # Keep Telegram in sync: update the published post and the moderation card.
+    from shared.services.news_moderation import NewsModerationService
+
+    service = NewsModerationService(session)
+    if news.published_message_ids:
+        await service.edit_published(news)
+    if news.moderation_message_id:
+        who = actor.full_name or actor.email
+        await service.update_card(
+            news,
+            status_line=f"✏️ Изменено · {who}",
+            keep_buttons=news.status == NewsStatus.PENDING,
+        )
     await session.refresh(news)
     return NewsOut.model_validate(news)
 
@@ -195,14 +224,29 @@ async def approve_news(
         **meta,
     )
 
+    # Record who processed it and when (moderator time, not AI time).
+    news.processed_at = datetime.now(timezone.utc)
+
+    slot = "—"
     if publish:
         if news.scheduled_at and news.scheduled_at > datetime.now(timezone.utc):
             news.status = NewsStatus.SCHEDULED
+            slot = news.scheduled_at.strftime("%H:%M")
         else:
-            from workers.tasks import publish_news
+            # Queue with spacing so several approvals do not flood the channel.
+            from workers.tasks import _schedule_publication
 
-            publish_news.delay(news_id)
+            slot = await _schedule_publication(session, news)
     await session.flush()
+
+    # Reflect the decision on the moderation card and drop its buttons.
+    from shared.services.news_moderation import NewsModerationService
+
+    who = actor.full_name or actor.email
+    queued = "" if slot in ("immediate", "—") else f" · в очереди на {slot}"
+    await NewsModerationService(session).update_card(
+        news, status_line=f"✅ Одобрено · {who}{queued}", keep_buttons=False
+    )
     await session.refresh(news)
     return NewsOut.model_validate(news)
 
@@ -227,6 +271,286 @@ async def reject_news(
         entity_type="news",
         entity_id=news_id,
         changes={"reason": reason},
+        **meta,
+    )
+    # Reflect the decision on the moderation card and drop its buttons.
+    from shared.services.news_moderation import NewsModerationService
+
+    who = actor.full_name or actor.email
+    await NewsModerationService(session).update_card(
+        news, status_line=f"❌ Отклонено · {who}", keep_buttons=False
+    )
+    await session.refresh(news)
+    return NewsOut.model_validate(news)
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: list[int]
+
+
+@router.post("/bulk-delete", response_model=Message)
+async def bulk_delete_news(
+    payload: BulkDeleteRequest,
+    session: DBSession,
+    meta: ClientMeta,
+    actor: User = Depends(require_permission(Permission.NEWS_DELETE)),
+) -> Message:
+    """Delete several news items at once."""
+    from sqlalchemy import delete as sql_delete
+
+    if not payload.ids:
+        return Message(detail="Ничего не выбрано")
+    await session.execute(sql_delete(News).where(News.id.in_(payload.ids)))
+    await AuditService(session).log(
+        "news.bulk_delete",
+        user_id=actor.id,
+        actor=actor.email,
+        entity_type="news",
+        changes={"ids": payload.ids},
+        **meta,
+    )
+    return Message(detail=f"Удалено новостей: {len(payload.ids)}")
+
+
+class RenderRequest(BaseModel):
+    """Optional unsaved overrides so the preview matches the editor exactly."""
+
+    template_id: int | None = None
+    title: str | None = None
+    text: str | None = None
+    emoji: str | None = None
+    author_name: str | None = None
+    submitted_anonymously: bool | None = None
+    source_name: str | None = None
+    hide_source: bool | None = None
+
+
+@router.post("/{news_id}/render", response_model=Message)
+async def render_news_preview(
+    news_id: int,
+    payload: RenderRequest,
+    session: DBSession,
+    _: User = Depends(require_permission(Permission.NEWS_VIEW)),
+) -> Message:
+    """Render the news through a template using unsaved editor values."""
+    from shared.models.city import City
+    from shared.models.source import Source
+    from shared.services.template_renderer import TemplateRenderer
+
+    news = await _get_news(session, news_id)
+    template = await _resolve_preview_template(session, payload.template_id, news.template_id)
+
+    hide_source = (
+        payload.hide_source if payload.hide_source is not None else news.hide_source
+    )
+    source_name = ""
+    if not hide_source:
+        source_name = payload.source_name if payload.source_name is not None else (
+            news.source_name or ""
+        )
+        if not source_name and news.source_id:
+            src = await session.get(Source, news.source_id)
+            source_name = src.name if src else ""
+
+    anonymous = (
+        payload.submitted_anonymously
+        if payload.submitted_anonymously is not None
+        else news.submitted_anonymously
+    )
+    author = "" if anonymous else (
+        payload.author_name if payload.author_name is not None else (news.author_name or "")
+    )
+
+    city_name = ""
+    if news.city_id:
+        city = await session.get(City, news.city_id)
+        city_name = city.name if city else ""
+
+    rendered = TemplateRenderer().render(
+        template,
+        title=(
+            payload.title
+            if payload.title is not None
+            else (news.title or news.original_title or "")
+        ),
+        text=payload.text if payload.text is not None else (news.text or news.original_text or ""),
+        source=source_name,
+        source_url=news.original_url or "",
+        city=city_name,
+        author=author,
+        emoji=payload.emoji if payload.emoji is not None else (news.emoji or ""),
+    )
+    return Message(detail=rendered)
+
+
+async def _resolve_preview_template(session, requested_id, news_template_id):  # type: ignore[no-untyped-def]
+    """Pick a template: explicit → news default → global default → any."""
+    from sqlalchemy import select as _select
+
+    from shared.models.template import Template
+
+    for candidate in (requested_id, news_template_id):
+        if candidate:
+            tpl = await session.get(Template, candidate)
+            if tpl is not None:
+                return tpl
+    tpl = await session.scalar(
+        _select(Template).where(Template.is_default.is_(True)).limit(1)
+    )
+    if tpl is None:
+        tpl = await session.scalar(_select(Template).limit(1))
+    if tpl is None:
+        raise NotFoundError("Нет доступного шаблона")
+    return tpl
+
+
+@router.get("/{news_id}/render", response_model=Message)
+async def render_news(
+    news_id: int,
+    session: DBSession,
+    template_id: int | None = None,
+    _: User = Depends(require_permission(Permission.NEWS_VIEW)),
+) -> Message:
+    """Render the news through a template (for the live editor preview)."""
+    from shared.models.source import Source
+    from shared.models.template import Template
+    from shared.services.template_renderer import TemplateRenderer
+
+    news = await _get_news(session, news_id)
+    template: Template | None = None
+    if template_id:
+        template = await session.get(Template, template_id)
+    if template is None and news.template_id:
+        template = await session.get(Template, news.template_id)
+    if template is None:
+        from sqlalchemy import select as _select
+
+        template = await session.scalar(
+            _select(Template).where(Template.is_default.is_(True)).limit(1)
+        )
+    if template is None:
+        raise NotFoundError("Нет доступного шаблона")
+
+    source_name = ""
+    if news.source_id:
+        src = await session.get(Source, news.source_id)
+        if src:
+            source_name = src.name
+    city_name = ""
+    if news.city_id:
+        from shared.models.city import City
+
+        city = await session.get(City, news.city_id)
+        city_name = city.name if city else ""
+    author = "" if news.submitted_anonymously else (news.author_name or "")
+
+    rendered = TemplateRenderer().render(
+        template,
+        title=news.title or news.original_title or "",
+        text=news.text or news.original_text or "",
+        source=source_name,
+        source_url=news.original_url or "",
+        city=city_name,
+        author=author,
+        emoji=news.emoji or "",
+    )
+    return Message(detail=rendered)
+
+
+@router.post("/{news_id}/regenerate", response_model=NewsOut)
+async def regenerate_news(
+    news_id: int,
+    session: DBSession,
+    ai_profile_id: int | None = None,
+    actor: User = Depends(require_permission(Permission.NEWS_EDIT)),
+) -> NewsOut:
+    """Re-run AI processing on the original text (for poor rewrites)."""
+    from shared.services.ai_service import AIService
+
+    news = await _get_news(session, news_id)
+    await VersionService(session).snapshot(news, edited_by=actor.id, comment="before regenerate")
+    try:
+        result, profile = await AIService(session).process(
+            news.original_title, news.original_text, ai_profile_id
+        )
+        news.title = result.title or news.original_title
+        news.text = result.text or news.original_text
+        news.ai_profile_id = profile.id
+        if result.emoji:
+            news.emoji = result.emoji
+        if result.embedding:
+            news.embedding = result.embedding
+    except Exception as exc:  # noqa: BLE001
+        from shared.exceptions import ExternalServiceError
+
+        raise ExternalServiceError(f"AI: {exc}") from exc
+    await session.flush()
+    await session.refresh(news)
+    return NewsOut.model_validate(news)
+
+
+@router.post("/{news_id}/publish-all-cities", response_model=Message)
+async def publish_all_cities(
+    news_id: int,
+    session: DBSession,
+    meta: ClientMeta,
+    actor: User = Depends(require_permission(Permission.NEWS_PUBLISH)),
+) -> Message:
+    """Publish this single news item to the channels of every active city."""
+    news = await _get_news(session, news_id)
+    if news.published_message_ids:
+        from shared.exceptions import ValidationError
+
+        raise ValidationError("Новость уже опубликована — сначала снимите публикацию")
+
+    from workers.tasks import publish_news_all_cities as task
+
+    task.delay(news_id)
+    await AuditService(session).log(
+        "news.publish_all_cities",
+        user_id=actor.id,
+        actor=actor.email,
+        entity_type="news",
+        entity_id=news_id,
+        **meta,
+    )
+    return Message(detail="Публикация во все каналы поставлена в очередь")
+
+
+@router.post("/{news_id}/unpublish", response_model=NewsOut)
+async def unpublish_news(
+    news_id: int,
+    session: DBSession,
+    meta: ClientMeta,
+    actor: User = Depends(require_permission(Permission.NEWS_PUBLISH)),
+) -> NewsOut:
+    """Withdraw a published post: delete it from Telegram and restore buttons.
+
+    After this the news can be edited and published again.
+    """
+    from shared.services.news_moderation import NewsModerationService
+
+    news = await _get_news(session, news_id)
+    service = NewsModerationService(session)
+    removed = await service.delete_published(news)
+    # WITHDRAWN records that the post *was* live and is now taken down; it can
+    # be published again from the panel or the moderation card.
+    news.status = NewsStatus.WITHDRAWN
+    await session.flush()
+
+    who = actor.full_name or actor.email
+    await service.update_card(
+        news,
+        status_line=f"↩️ Публикация снята · {who} ({removed} сообщ.) — можно опубликовать заново",
+        keep_buttons=True,
+    )
+    await AuditService(session).log(
+        "news.unpublish",
+        user_id=actor.id,
+        actor=actor.email,
+        entity_type="news",
+        entity_id=news_id,
+        changes={"removed": removed},
         **meta,
     )
     await session.refresh(news)
@@ -258,16 +582,114 @@ async def publish_now(
     meta: ClientMeta,
     actor: User = Depends(require_permission(Permission.NEWS_PUBLISH)),
 ) -> NewsOut:
-    """Publish immediately (synchronously) to the city's channels."""
-    from shared.services.publisher_service import PublisherService
+    """Queue the item for publication, respecting the spacing interval.
 
-    news = await PublisherService(session).publish(news_id)
+    The publication queue keeps posts apart; only items flagged
+    ``publish_immediately`` bypass it. This mirrors the behaviour of approving
+    from the moderation card, so publishing from the editor no longer floods
+    the channel.
+    """
+    news = await _get_news(session, news_id)
+    if news.published_message_ids:
+        from shared.exceptions import ValidationError
+
+        raise ValidationError("Новость уже опубликована — сначала снимите публикацию")
+
+    news.status = NewsStatus.APPROVED
+    if news.moderated_by is None:
+        news.moderated_by = actor.id
+    if news.processed_at is None:
+        news.processed_at = datetime.now(timezone.utc)
+
+    from workers.tasks import _schedule_publication
+
+    slot = await _schedule_publication(session, news)
+    await session.flush()
+
     await AuditService(session).log(
         "news.publish",
         user_id=actor.id,
         actor=actor.email,
         entity_type="news",
         entity_id=news_id,
+        changes={"slot": slot},
+        **meta,
+    )
+    await session.refresh(news)
+    return NewsOut.model_validate(news)
+
+
+class ScheduleRequest(BaseModel):
+    """Publish the item at a specific moment (ISO datetime, UTC or with offset)."""
+
+    scheduled_at: datetime | None = None
+
+
+@router.post("/{news_id}/schedule", response_model=NewsOut)
+async def schedule_news(
+    news_id: int,
+    payload: ScheduleRequest,
+    session: DBSession,
+    meta: ClientMeta,
+    actor: User = Depends(require_permission(Permission.NEWS_PUBLISH)),
+) -> NewsOut:
+    """Queue the item for publication at a given time (or cancel the schedule).
+
+    The post is held by the platform and published by the scheduler worker at
+    the requested moment. Telegram's own "scheduled messages" feature is not
+    available to bots (Bot API has no scheduling parameter), so the delay is
+    handled here and the post appears in the channel exactly at that time.
+    """
+    news = await _get_news(session, news_id)
+    if news.published_message_ids:
+        from shared.exceptions import ValidationError
+
+        raise ValidationError("Новость уже опубликована — сначала снимите публикацию")
+
+    if payload.scheduled_at is None:
+        # Cancel the schedule and put the item back into moderation.
+        news.scheduled_at = None
+        if news.status == NewsStatus.SCHEDULED:
+            news.status = NewsStatus.PENDING
+        status_line = "🕒 Планирование отменено"
+    else:
+        when = payload.scheduled_at
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        if when <= datetime.now(timezone.utc):
+            from shared.exceptions import ValidationError
+
+            raise ValidationError("Время публикации должно быть в будущем")
+        news.scheduled_at = when
+        news.status = NewsStatus.SCHEDULED
+        news.publish_immediately = False
+        if news.moderated_by is None:
+            news.moderated_by = actor.id
+        if news.processed_at is None:
+            news.processed_at = datetime.now(timezone.utc)
+
+        from shared.services.settings_service import SettingsService
+
+        tz_offset = int(
+            await SettingsService(session).get("ui.timezone_offset_hours", 3)
+        )
+        local = when.astimezone(timezone(timedelta(hours=tz_offset)))
+        status_line = f"🕒 Запланировано на {local.strftime('%d.%m.%Y %H:%M')}"
+    await session.flush()
+
+    from shared.services.news_moderation import NewsModerationService
+
+    who = actor.full_name or actor.email
+    await NewsModerationService(session).update_card(
+        news, status_line=f"{status_line} · {who}", keep_buttons=True
+    )
+    await AuditService(session).log(
+        "news.schedule",
+        user_id=actor.id,
+        actor=actor.email,
+        entity_type="news",
+        entity_id=news_id,
+        changes={"scheduled_at": payload.scheduled_at.isoformat() if payload.scheduled_at else None},
         **meta,
     )
     await session.refresh(news)
@@ -282,6 +704,18 @@ async def delete_news(
     actor: User = Depends(require_permission(Permission.NEWS_DELETE)),
 ) -> Message:
     news = await _get_news(session, news_id)
+
+    # Remove the post from Telegram and mark the moderation card as deleted
+    # before the row disappears.
+    from shared.services.news_moderation import NewsModerationService
+
+    service = NewsModerationService(session)
+    removed = await service.delete_published(news)
+    who = actor.full_name or actor.email
+    await service.update_card(
+        news, status_line=f"🗑 Удалено · {who}", keep_buttons=False
+    )
+
     await session.delete(news)
     await session.flush()
     await AuditService(session).log(
@@ -290,6 +724,7 @@ async def delete_news(
         actor=actor.email,
         entity_type="news",
         entity_id=news_id,
+        changes={"telegram_messages_removed": removed},
         **meta,
     )
-    return Message(detail="News deleted")
+    return Message(detail="Новость удалена")
