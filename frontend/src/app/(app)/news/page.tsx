@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import useSWR from "swr";
 import { CalendarClock, Check, Pencil, Trash2, Undo2, X } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
@@ -10,15 +10,25 @@ import { StatusBadge, StateTag, STATUS_LABELS, STATUS_ORDER } from "@/components
 import { RoleTag } from "@/components/RoleTag";
 import { MediaHoverPreview } from "@/components/MediaHoverPreview";
 import { Pagination } from "@/components/Pagination";
+import { ResizableTable } from "@/components/ResizableTable";
 import { Modal, Field } from "@/components/Modal";
-import { Select } from "@/components/Controls";
+import { Checkbox, Select } from "@/components/Controls";
+import { confirm } from "@/components/ConfirmDialog";
 
-/** Top-level tabs: city news vs. news that belong to no monitored city. */
-const TABS = [
-  { key: "city", label: "По городам" },
-  { key: "world", label: "🌍 Мировые" },
-  { key: "", label: "Все" },
-] as const;
+interface Tab {
+  key: string;
+  label: string;
+  /** Backend `scope` filter; empty means "no scope filter". */
+  scope: string;
+  /** Set for section tabs built from a non-geographic entry. */
+  cityId?: number;
+}
+
+/** Fixed tabs; the non-geographic sections are appended from /cities. */
+const BASE_TABS: Tab[] = [
+  { key: "city", label: "По городам", scope: "city" },
+  { key: "all", label: "Все", scope: "" },
+];
 
 /** Local datetime string (yyyy-MM-ddTHH:mm) for the schedule input. */
 function toLocalInput(date: Date): string {
@@ -29,7 +39,7 @@ function toLocalInput(date: Date): string {
 }
 
 export default function NewsPage() {
-  const [scope, setScope] = useState<string>("city");
+  const [tabKey, setTabKey] = useState<string>("");
   const [status, setStatus] = useState("");
   const [cityId, setCityId] = useState("");
   const [search, setSearch] = useState("");
@@ -40,16 +50,40 @@ export default function NewsPage() {
   const [scheduleAt, setScheduleAt] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  const { data: cities } = useSWR<Page<City>>("/cities?size=200", fetcher);
+
+  // Sections the user created themselves ("другое": мир, интернет…) become tabs,
+  // so nothing about the news layout is hardcoded here.
+  const sectionTabs: Tab[] = (cities?.items ?? [])
+    .filter((c) => c.kind === "other")
+    .map((c) => ({
+      key: `section-${c.id}`,
+      label: c.is_world_bucket ? `🌍 ${c.name}` : c.name,
+      scope: "",
+      cityId: c.id,
+    }));
+  const tabs: Tab[] = [BASE_TABS[0], ...sectionTabs, BASE_TABS[1]];
+
+  // Restore the last active tab from localStorage on mount.
+  useEffect(() => {
+    const saved = localStorage.getItem("snews.news.active_tab");
+    const exists = saved && tabs.some((t) => t.key === saved);
+    setTabKey(exists ? saved : tabs[0]?.key ?? "city");
+  }, [cities]);
+
+  const activeTab = tabs.find((t) => t.key === tabKey) ?? tabs[0];
+
   const query = new URLSearchParams();
-  if (scope) query.set("scope", scope);
+  if (activeTab.scope) query.set("scope", activeTab.scope);
   if (status) query.set("status", status);
-  if (cityId) query.set("city_id", cityId);
+  // A section tab pins the city; the dropdown only applies to the city tab.
+  if (activeTab.cityId) query.set("city_id", String(activeTab.cityId));
+  else if (cityId) query.set("city_id", cityId);
   if (search) query.set("search", search);
   query.set("page", String(page));
   query.set("size", String(size));
 
   const { data, mutate, isLoading } = useSWR<Page<NewsItem>>(`/news?${query.toString()}`, fetcher);
-  const { data: cities } = useSWR<Page<City>>("/cities?size=200", fetcher);
   const { data: users } = useSWR<Page<User>>("/users?size=200", fetcher);
   const { data: sources } = useSWR<Page<Source>>("/sources?size=200", fetcher);
 
@@ -121,17 +155,17 @@ export default function NewsPage() {
   const act = (id: number, action: "approve" | "reject" | "unpublish") =>
     run(() => api(`/news/${id}/${action}`, { method: "POST" }));
 
-  const remove = (id: number) => {
-    if (!confirm("Удалить новость безвозвратно?")) return;
+  const remove = async (id: number) => {
+    if (!(await confirm({ message: "Удалить новость безвозвратно?", danger: true }))) return;
     return run(async () => {
       await api(`/news/${id}`, { method: "DELETE" });
       setSelected((s) => s.filter((x) => x !== id));
     });
   };
 
-  const bulkDelete = () => {
+  const bulkDelete = async () => {
     if (!selected.length) return;
-    if (!confirm(`Удалить выбранные новости (${selected.length})?`)) return;
+    if (!(await confirm({ message: `Удалить выбранные новости (${selected.length})?`, danger: true }))) return;
     return run(async () => {
       await api("/news/bulk-delete", { method: "POST", body: JSON.stringify({ ids: selected }) });
       setSelected([]);
@@ -167,7 +201,9 @@ export default function NewsPage() {
   const toggleAll = () => setSelected(allSelected ? [] : items.map((n) => n.id));
 
   const switchTab = (key: string) => {
-    setScope(key);
+    setTabKey(key);
+    localStorage.setItem("snews.news.active_tab", key);
+    setCityId("");
     setPage(1);
     setSelected([]);
   };
@@ -187,11 +223,11 @@ export default function NewsPage() {
 
       {/* Scope tabs */}
       <div className="mb-4 flex gap-1 border-b border-border">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.key}
             className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
-              scope === t.key
+              activeTab.key === t.key
                 ? "border-primary text-primary"
                 : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
@@ -224,7 +260,7 @@ export default function NewsPage() {
             </option>
           ))}
         </Select>
-        {scope !== "world" && (
+        {!activeTab.cityId && (
           <Select
             className="max-w-[220px]"
             value={cityId}
@@ -233,7 +269,7 @@ export default function NewsPage() {
               setPage(1);
             }}
           >
-            <option value="">Все города</option>
+            <option value="">Все разделы</option>
             {cities?.items.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
@@ -252,25 +288,34 @@ export default function NewsPage() {
         />
       </div>
 
+      {data && (
+        <Pagination
+          position="top"
+          page={page}
+          size={size}
+          total={data.total}
+          onPage={setPage}
+          onSize={setSize}
+        />
+      )}
+
       <div className="card overflow-hidden">
         <div className="table-wrap">
-          <table className="w-full text-sm">
-            <thead className="bg-muted text-left text-muted-foreground">
-              <tr>
-                <th className="px-3 py-3">
-                  <input type="checkbox" checked={allSelected} onChange={toggleAll} />
-                </th>
-                <th className="px-3 py-3">ID</th>
-                <th className="px-4 py-3">Заголовок</th>
-                <th className="px-4 py-3">Город</th>
-                <th className="px-4 py-3">Автор / источник</th>
-                <th className="px-4 py-3">Обработал</th>
-                <th className="px-4 py-3">Статус</th>
-                <th className="px-4 py-3">В источнике</th>
-                <th className="px-4 py-3 text-right">Действия</th>
-              </tr>
-            </thead>
-            <tbody>
+          <ResizableTable
+            id="news"
+            rawColumns={[0, 1, 8]}
+            columns={[
+              <Checkbox key="all" checked={allSelected} onChange={() => toggleAll()} />,
+              "ID",
+              "Заголовок",
+              "Канал",
+              "Автор / источник",
+              "Обработал",
+              "Статус",
+              "В источнике",
+              "Действия",
+            ]}
+          >
               {isLoading && (
                 <tr>
                   <td colSpan={9} className="px-4 py-6 text-center text-muted-foreground">
@@ -281,8 +326,7 @@ export default function NewsPage() {
               {items.map((n) => (
                 <tr key={n.id} className="border-t border-border">
                   <td className="px-3 py-3">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={selected.includes(n.id)}
                       onChange={() => toggle(n.id)}
                     />
@@ -300,7 +344,7 @@ export default function NewsPage() {
                   <td className="px-4 py-3">
                     {n.is_world_news ? (
                       <span className="badge bg-cyan-50 text-cyan-700 ring-cyan-200 dark:bg-cyan-950/50 dark:text-cyan-300 dark:ring-cyan-900">
-                        🌍 Мировые
+                        🌍 {n.city_id ? cityName(n.city_id) : "Мировые"}
                       </span>
                     ) : (
                       <span className="badge bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:ring-indigo-900">
@@ -380,8 +424,7 @@ export default function NewsPage() {
                   </td>
                 </tr>
               )}
-            </tbody>
-          </table>
+          </ResizableTable>
         </div>
       </div>
 

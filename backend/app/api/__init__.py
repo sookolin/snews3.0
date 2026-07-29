@@ -13,6 +13,8 @@ from backend.app.api import (
     dashboard,
     media,
     news,
+    notifications,
+    profile,
     sources,
     templates,
     users,
@@ -25,6 +27,8 @@ from backend.app.api import (
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
+api_router.include_router(profile.router, prefix="/profile", tags=["profile"])
+api_router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 api_router.include_router(cities.router, prefix="/cities", tags=["cities"])
 api_router.include_router(sources.router, prefix="/sources", tags=["sources"])
 api_router.include_router(news.router, prefix="/news", tags=["news"])

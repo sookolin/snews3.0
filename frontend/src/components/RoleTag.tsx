@@ -1,4 +1,7 @@
+"use client";
+
 import { cn } from "@/lib/utils";
+import { useRoleLabels } from "@/lib/roles";
 
 /**
  * Role labels and colours, ordered by access level: the higher the role, the
@@ -46,7 +49,10 @@ export const ROLE_LABELS: Record<string, string> = Object.fromEntries(
  * a glance who handled a news item.
  */
 export function RoleTag({ name, role }: { name: string; role?: string }) {
-  const meta = role ? ROLE_META[role] : undefined;
+  const labels = useRoleLabels();
+  const base = role ? ROLE_META[role] : undefined;
+  // Role names are renamable, so the label comes from the API, not ROLE_META.
+  const meta = base && role ? { ...base, label: labels[role] ?? base.label } : undefined;
   return (
     <span
       className={cn(

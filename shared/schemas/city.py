@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -20,6 +21,8 @@ class CityBase(BaseModel):
     language: str = "ru"
     is_active: bool = True
     template_id: int | None = None
+    kind: Literal["city", "other"] = "city"
+    is_world_bucket: bool = False
 
 
 class CityCreate(CityBase):
@@ -38,6 +41,8 @@ class CityUpdate(BaseModel):
     is_active: bool | None = None
     template_id: int | None = None
     telegram_topic_id: int | None = None
+    kind: Literal["city", "other"] | None = None
+    is_world_bucket: bool | None = None
 
 
 class CityOut(ORMModel):
@@ -54,4 +59,6 @@ class CityOut(ORMModel):
     is_active: bool
     telegram_topic_id: int | None
     template_id: int | None
+    kind: str = "city"
+    is_world_bucket: bool = False
     created_at: datetime

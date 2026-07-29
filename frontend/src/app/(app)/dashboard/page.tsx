@@ -139,22 +139,38 @@ export default function DashboardPage() {
         </div>
 
         <div className="card p-5">
-          <h2 className="mb-4 text-lg font-medium">Каналы по городам</h2>
-          <div className="space-y-3 max-h-72 overflow-y-auto">
-            {data.channels_by_city?.map((item: { city: string; count: number }) => (
-              <div key={item.city} className="flex items-center justify-between">
-                <span className="text-sm font-medium">{item.city}</span>
-                <div className="flex items-center gap-2">
-                  <div className="w-32 h-4 bg-muted rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-primary rounded-full"
-                      style={{ width: `${Math.min(item.count * 20, 100)}%` }}
-                    />
-                  </div>
-                  <span className="text-sm text-muted-foreground w-10 text-right">{item.count}</span>
-                </div>
-              </div>
-            ))}
+          <h2 className="mb-1 text-lg font-medium">Источники за 30 дней</h2>
+          <p className="mb-4 text-sm text-muted-foreground">Сколько принесли и сколько дошло до канала</p>
+          <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart layout="vertical" data={data.top_sources} barGap={2}>
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                <XAxis type="number" allowDecimals={false} fontSize={12} />
+                <YAxis type="category" dataKey="name" width={130} fontSize={11} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="total" name="Найдено" fill="#94a3b8" radius={[0, 4, 4, 0]} />
+                <Bar dataKey="published" name="Опубликовано" fill="#22c55e" radius={[0, 4, 4, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="card p-5">
+          <h2 className="mb-1 text-lg font-medium">Активность по часам</h2>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Публикации за 30 дней. Среднее время до публикации: {data.avg_moderation_minutes} мин
+          </p>
+          <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={data.by_hour}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="hour" fontSize={12} tickFormatter={(h: number) => `${h}:00`} />
+                <YAxis allowDecimals={false} fontSize={12} />
+                <Tooltip labelFormatter={(h) => `${h}:00`} />
+                <Bar dataKey="count" name="Публикаций" fill="#6366f1" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
       </div>

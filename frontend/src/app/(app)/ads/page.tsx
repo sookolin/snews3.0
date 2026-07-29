@@ -12,6 +12,9 @@ import { ButtonsEditor } from "@/components/ButtonsEditor";
 import { RichTextEditor } from "@/components/RichTextEditor";
 import { TelegramPreview, type PreviewButton } from "@/components/TelegramPreview";
 import { YandexMapPicker } from "@/components/YandexMapPicker";
+import { ResizableTable } from "@/components/ResizableTable";
+import { useToast } from "@/components/Toast";
+import { confirm } from "@/components/ConfirmDialog";
 
 interface Channel { id: number; city_id: number; title: string; username?: string; avatar_url?: string }
 interface Template { id: number; name: string }
@@ -105,6 +108,7 @@ export default function AdsPage() {
   const [uploading, setUploading] = useState(false);
   const [showMap, setShowMap] = useState(false);
   const [renderedAd, setRenderedAd] = useState("");
+  const toast = useToast();
 
   // Render the ad exactly as it will be published (template + legal marking).
   useEffect(() => {
@@ -202,13 +206,23 @@ export default function AdsPage() {
     });
 
   const publish = async (id: number) => {
-    try { await api(`/ads/${id}/publish`, { method: "POST" }); mutate(); }
-    catch (e) { alert((e as Error).message); }
+    try {
+      await api(`/ads/${id}/publish`, { method: "POST" });
+      mutate();
+      toast.success("Реклама отправлена на публикацию");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   };
   const remove = async (id: number) => {
-    if (!confirm("Удалить рекламу?")) return;
-    await api(`/ads/${id}`, { method: "DELETE" });
-    mutate();
+    if (!(await confirm({ message: "Удалить рекламу?", danger: true }))) return;
+    try {
+      await api(`/ads/${id}`, { method: "DELETE" });
+      mutate();
+      toast.success("Реклама удалена");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   };
 
   const previewMedia = [
@@ -242,20 +256,19 @@ export default function AdsPage() {
 
       <div className="card overflow-hidden">
         <div className="table-wrap">
-        <table className="w-full text-sm">
-          <thead className="bg-muted text-left text-muted-foreground">
-            <tr>
-              <th className="px-4 py-3">Название</th>
-              <th className="px-4 py-3">Рекламодатель</th>
-              <th className="px-4 py-3">erid</th>
-              <th className="px-4 py-3">Авто</th>
-              <th className="px-4 py-3">Статус</th>
-              <th className="px-4 py-3">Показы/Клики</th>
-              <th className="px-4 py-3">Цена</th>
-              <th className="px-4 py-3 text-right">Действия</th>
-            </tr>
-          </thead>
-          <tbody>
+        <ResizableTable
+          id="ads"
+          columns={[
+            "Название",
+            "Рекламодатель",
+            "erid",
+            "Авто",
+            "Статус",
+            "Показы/Клики",
+            "Цена",
+            "Действия",
+          ]}
+        >
             {data?.items.map((a) => (
               <tr key={a.id} className="border-t border-border">
                 <td className="px-4 py-3 font-medium">{a.title}</td>
@@ -275,7 +288,7 @@ export default function AdsPage() {
                 <td className="px-4 py-3">{a.impressions} / {a.clicks}</td>
                 <td className="px-4 py-3">{a.price != null ? `${a.price} ₽` : "—"}</td>
                 <td className="px-4 py-3">
-                  <div className="flex justify-end gap-1.5">
+                  <div className="flex justify-center gap-1.5">
                     <button className="btn-icon" title="Изменить" onClick={() => openEdit(a)}><Pencil className="h-4 w-4" /></button>
                     <button className="btn-icon-primary" title="Опубликовать" onClick={() => publish(a.id)}><Send className="h-4 w-4" /></button>
                     <button className="btn-icon-danger" title="Удалить" onClick={() => remove(a.id)}><Trash2 className="h-4 w-4" /></button>
@@ -286,8 +299,7 @@ export default function AdsPage() {
             {data && data.items.length === 0 && (
               <tr><td colSpan={8} className="px-4 py-6 text-center text-muted-foreground">Рекламы нет</td></tr>
             )}
-          </tbody>
-        </table>
+        </ResizableTable>
         </div>
       </div>
 
@@ -377,7 +389,7 @@ export default function AdsPage() {
                   </div>
                 )}
                 <Field label="Медиа по URL" hint="По одному в строке">
-                  <textarea className="input min-h-[50px] font-mono text-xs" value={(form.media_urls ?? []).join("\n")} onChange={(e) => upd({ media_urls: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })} />
+                  <textarea className="input input-compact font-mono text-xs" value={(form.media_urls ?? []).join("\n")} onChange={(e) => upd({ media_urls: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })} />
                 </Field>
                 <div className="mt-2">
                   <Checkbox

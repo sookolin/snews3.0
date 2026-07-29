@@ -56,6 +56,11 @@ dependencies = [
     "pymorphy3>=2.0.2",
     # Media / watermark
     "Pillow>=11.0.0",
+    # Web Push (PWA / iOS home-screen notifications)
+    "pywebpush>=2.0.0",
+    "py-vapid>=1.9.1",
+    # Monitoring (CPU/memory for the Очередь и мониторинг page)
+    "psutil>=6.1.0",
     # Utils
     "structlog>=24.4.0",
     "tenacity>=9.0.0",

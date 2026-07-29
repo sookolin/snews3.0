@@ -12,6 +12,10 @@ export interface City {
   is_active: boolean;
   telegram_topic_id?: number;
   template_id?: number;
+  /** "city" | "other" — "other" holds non-geographic sections (мир, интернет). */
+  kind?: string;
+  /** True for the single section that collects world / unmatched news. */
+  is_world_bucket?: boolean;
   created_at: string;
 }
 
@@ -86,7 +90,9 @@ export interface DashboardStats {
   total_sources: number;
   total_channels: number;
   active_channels: number;
-  channels_by_city: { city: string; count: number }[];
+  top_sources: { name: string; total: number; published: number }[];
+  by_hour: { hour: number; count: number }[];
+  avg_moderation_minutes: number;
   bot_submissions: number;
   bot_unique_users: number;
   bot_anonymous: number;
@@ -112,5 +118,24 @@ export interface User {
   language: string;
   telegram_id?: number | null;
   yandex_id?: string | null;
+  vk_id?: string | null;
+  last_login_at?: string | null;
   permissions?: { grant?: string[]; deny?: string[] };
+}
+
+/** Personal cabinet payload (`GET /profile`). */
+export interface Profile {
+  user: User;
+  stats: {
+    moderated_total: number;
+    approved: number;
+    rejected: number;
+    published: number;
+    edited: number;
+    last_7_days: { date: string; count: number }[];
+  };
+  notify_prefs: Record<string, Record<string, unknown>>;
+  push_devices: number;
+  /** False when a super admin opened someone else's cabinet. */
+  is_self: boolean;
 }

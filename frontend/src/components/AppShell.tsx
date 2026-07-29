@@ -5,6 +5,9 @@ import { useRouter, usePathname } from "next/navigation";
 import { Menu, X } from "lucide-react";
 import { getToken } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
+import { useProfileWatcher } from "@/lib/useProfileWatcher";
+
+const COLLAPSE_KEY = "snews.sidebar.collapsed";
 
 /** Authenticated shell: redirects to /login when no token is present. */
 export function AppShell({ children }: { children: ReactNode }) {
@@ -12,11 +15,26 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [ready, setReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Desktop sidebar: false = full, true = icon-only
+  const [collapsed, setCollapsed] = useState(false);
+
+  // Poll for profile changes (role, permissions, is_active) — toast when changed by another user.
+  useProfileWatcher();
 
   useEffect(() => {
     if (!getToken()) router.replace("/login");
     else setReady(true);
   }, [router]);
+
+  useEffect(() => {
+    setCollapsed(localStorage.getItem(COLLAPSE_KEY) === "1");
+  }, []);
+
+  const toggleCollapsed = () =>
+    setCollapsed((v) => {
+      localStorage.setItem(COLLAPSE_KEY, v ? "0" : "1");
+      return !v;
+    });
 
   // Close the mobile drawer on navigation.
   useEffect(() => setMenuOpen(false), [pathname]);
@@ -31,9 +49,13 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Desktop sidebar */}
-      <div className="hidden lg:block">
-        <Sidebar />
+      {/* Desktop sidebar — shrinks to icon-only strip when collapsed. */}
+      <div
+        className={`hidden shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out lg:block ${
+          collapsed ? "w-16" : "w-60"
+        }`}
+      >
+        <Sidebar onCollapse={toggleCollapsed} iconOnly={collapsed} />
       </div>
 
       {/* Mobile drawer */}

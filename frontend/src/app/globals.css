@@ -14,6 +14,11 @@
   --muted: 220 14% 96%;
   --muted-foreground: 220 9% 46%;
   --sidebar: 222 47% 11%;
+  --sidebar-foreground: 215 20% 78%;
+  --sidebar-title: 220 9% 55%;
+  --sidebar-strong: 0 0% 100%;
+  --sidebar-hover: 0 0% 100% / 0.1;
+  --sidebar-border: 0 0% 100% / 0.1;
   --accent: 239 84% 60%;
 }
 
@@ -28,7 +33,33 @@
   --muted: 217 30% 16%;
   --muted-foreground: 215 20% 65%;
   --sidebar: 222 47% 9%;
+  --sidebar-foreground: 215 20% 78%;
+  --sidebar-title: 215 16% 52%;
+  --sidebar-strong: 0 0% 100%;
+  --sidebar-hover: 0 0% 100% / 0.1;
+  --sidebar-border: 0 0% 100% / 0.1;
   --accent: 239 84% 67%;
+}
+
+/* Third mode: light content with a light sidebar too, for users who find the
+   dark sidebar too heavy. Only the sidebar variables differ from :root. */
+.dim {
+  color-scheme: light;
+  --background: 220 20% 97%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --border: 220 13% 91%;
+  --primary: 239 84% 60%;
+  --primary-foreground: 0 0% 100%;
+  --muted: 220 14% 96%;
+  --muted-foreground: 220 9% 46%;
+  --sidebar: 0 0% 100%;
+  --sidebar-foreground: 222 47% 11%;
+  --sidebar-title: 220 9% 46%;
+  --sidebar-strong: 222 47% 11%;
+  --sidebar-hover: 220 14% 94%;
+  --sidebar-border: 220 13% 91%;
+  --accent: 239 84% 60%;
 }
 
 body {
@@ -59,9 +90,11 @@ html.theme-anim *::after {
 
 .btn {
   @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold
-         shadow-sm transition-all
+         shadow-sm transition-all duration-200 ease-out
+         hover:-translate-y-px hover:shadow-md active:translate-y-0 active:scale-[0.97] active:shadow-sm
          focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary
-         disabled:cursor-not-allowed disabled:opacity-50;
+         disabled:cursor-not-allowed disabled:opacity-50
+         disabled:hover:translate-y-0 disabled:hover:shadow-sm;
 }
 .btn-primary { @apply btn bg-primary text-primary-foreground hover:brightness-110 active:brightness-95; }
 .btn-outline { @apply btn border border-border bg-card text-foreground shadow-none hover:bg-muted; }
@@ -70,8 +103,9 @@ html.theme-anim *::after {
 /* Icon-only square buttons (space saving) */
 .btn-icon {
   @apply inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-card
-         text-muted-foreground transition-colors hover:bg-muted hover:text-foreground
-         disabled:cursor-not-allowed disabled:opacity-50;
+         text-muted-foreground transition-all duration-200 ease-out
+         hover:bg-muted hover:text-foreground hover:scale-105 active:scale-90
+         disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100;
 }
 .btn-icon-primary { @apply btn-icon border-transparent bg-primary text-white hover:brightness-110 hover:text-white; }
 .btn-icon-success { @apply btn-icon border-transparent bg-emerald-600 text-white hover:bg-emerald-700 hover:text-white; }
@@ -83,11 +117,50 @@ html.theme-anim *::after {
          focus:border-primary focus:ring-2 focus:ring-primary/20;
 }
 
+/* Textareas hold long text (prompts, templates, article bodies), so give them
+   real room by default and let the user drag them taller. Page-level
+   min-h-[...] utilities still win where a specific height is wanted. */
+textarea.input {
+  @apply min-h-[160px] resize-y leading-relaxed;
+}
+/* Opt-out for short list-style fields (a couple of URLs, one-line notes). */
+textarea.input.input-compact {
+  @apply min-h-[80px];
+}
+
 .badge { @apply inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset; }
+
+/* Dropdown / popover entrance. */
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.animate-in { animation: pop-in 140ms ease-out; }
 
 /* Tables */
 table thead th { @apply text-[11px] font-semibold uppercase tracking-wider; }
 table tbody tr { @apply transition-colors hover:bg-muted/60; }
+
+/* ── Custom scrollbars ───────────────────────────────────────────────────────
+   Themed via the palette variables so all three modes stay consistent.
+   Firefox gets the two-value `scrollbar-color`; WebKit gets the pseudo
+   elements below. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.4) transparent;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--muted-foreground) / 0.35);
+  border-radius: 9999px;
+  /* Inset the thumb so it reads as a floating pill, not a full-width bar. */
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition: background-color 150ms ease;
+}
+::-webkit-scrollbar-thumb:hover { background-color: hsl(var(--muted-foreground) / 0.6); }
+::-webkit-scrollbar-corner { background: transparent; }
 
 /* ── iOS Telegram message preview ────────────────────────────────────────── */
 .ios-tg {

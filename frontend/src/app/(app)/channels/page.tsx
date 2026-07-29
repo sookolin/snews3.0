@@ -1,12 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import { api, fetcher } from "@/lib/api";
 import type { City, Page } from "@/lib/types";
 import { Pencil, RefreshCw, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal, Field } from "@/components/Modal";
+import { Checkbox, Select } from "@/components/Controls";
+import { ResizableTable } from "@/components/ResizableTable";
+import { useToast } from "@/components/Toast";
+import { confirm } from "@/components/ConfirmDialog";
 
 interface Channel {
   id: number;
@@ -23,6 +27,9 @@ interface Channel {
 }
 
 interface Template { id: number; name: string }
+
+/** Fields Telegram owns — never sent back on save, always parsed. */
+const PARSED_FIELDS = ["username", "avatar_url"] as const;
 
 const MODES = [
   { value: "immediate", label: "Сразу после одобрения" },
@@ -41,6 +48,9 @@ export default function ChannelsPage() {
   const { data: templates } = useSWR<Page<Template>>("/templates?size=100", fetcher);
   const [form, setForm] = useState<Partial<Channel> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const toast = useToast();
+  //: Guards the one-shot identity refresh below against SWR re-renders.
+  const syncedRef = useRef(false);
 
   const cityName = (id: number) => cities?.items.find((c) => c.id === id)?.name ?? `#${id}`;
 
@@ -56,7 +66,8 @@ export default function ChannelsPage() {
     setError(null);
     if (!form.city_id) { setError("Выберите город"); return; }
     try {
-      const payload = { ...form };
+      const payload: Partial<Channel> = { ...form };
+      for (const field of PARSED_FIELDS) delete payload[field];
       if (form.id) {
         await api(`/channels/${form.id}`, { method: "PATCH", body: JSON.stringify(payload) });
       } else {
@@ -64,15 +75,22 @@ export default function ChannelsPage() {
       }
       setForm(null);
       mutate();
+      toast.success(form.id ? "Канал обновлён" : "Канал привязан");
     } catch (e) {
       setError((e as Error).message);
+      toast.error((e as Error).message);
     }
   };
 
   const remove = async (id: number) => {
-    if (!confirm("Удалить канал?")) return;
-    await api(`/channels/${id}`, { method: "DELETE" });
-    mutate();
+    if (!(await confirm({ message: "Удалить канал?", danger: true }))) return;
+    try {
+      await api(`/channels/${id}`, { method: "DELETE" });
+      mutate();
+      toast.success("Канал удалён");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   };
 
   /**
@@ -83,10 +101,33 @@ export default function ChannelsPage() {
     try {
       await api(`/channels/${id}/sync`, { method: "POST" });
       mutate();
+      toast.success("Название и аватарка обновлены из Telegram");
     } catch (e) {
-      alert((e as Error).message);
+      toast.error((e as Error).message);
     }
   };
+
+  /**
+   * Refresh the parsed identity of every channel once the page opens, so the
+   * removed manual fields stay accurate without any user action.
+   */
+  useEffect(() => {
+    if (!data?.items.length || syncedRef.current) return;
+    syncedRef.current = true;
+    (async () => {
+      let changed = false;
+      for (const c of data.items) {
+        if (c.username && c.avatar_url) continue;
+        try {
+          await api(`/channels/${c.id}/sync`, { method: "POST" });
+          changed = true;
+        } catch {
+          // A single unreachable channel must not block the rest.
+        }
+      }
+      if (changed) mutate();
+    })();
+  }, [data, mutate]);
 
   return (
     <div>
@@ -103,18 +144,10 @@ export default function ChannelsPage() {
 
       <div className="card overflow-hidden">
         <div className="table-wrap">
-        <table className="w-full text-sm">
-          <thead className="bg-muted text-left text-muted-foreground">
-            <tr>
-              <th className="px-4 py-3">Название</th>
-              <th className="px-4 py-3">Chat ID</th>
-              <th className="px-4 py-3">Город</th>
-              <th className="px-4 py-3">Режим</th>
-              <th className="px-4 py-3">Активен</th>
-              <th className="px-4 py-3 text-right">Действия</th>
-            </tr>
-          </thead>
-          <tbody>
+        <ResizableTable
+          id="channels"
+          columns={["Название", "Chat ID", "Раздел", "Режим", "Активен", "Действия"]}
+        >
             {data?.items.map((c) => (
               <tr key={c.id} className="border-t border-border">
                 <td className="px-4 py-3 font-medium">{c.title}</td>
@@ -123,7 +156,7 @@ export default function ChannelsPage() {
                 <td className="px-4 py-3">{MODES.find((m) => m.value === c.publish_mode)?.label ?? c.publish_mode}</td>
                 <td className="px-4 py-3">{c.is_active ? "Да" : "Нет"}</td>
                 <td className="px-4 py-3">
-                  <div className="flex justify-end gap-2">
+                  <div className="flex justify-center gap-2">
                     <button className="btn-icon" title="Изменить" onClick={() => openEdit(c)}>
                       <Pencil className="h-4 w-4" />
                     </button>
@@ -144,8 +177,7 @@ export default function ChannelsPage() {
             {data && data.items.length === 0 && (
               <tr><td colSpan={6} className="px-4 py-6 text-center text-muted-foreground">Нет привязанных каналов</td></tr>
             )}
-          </tbody>
-        </table>
+        </ResizableTable>
         </div>
       </div>
 
@@ -154,23 +186,18 @@ export default function ChannelsPage() {
           <div className="space-y-4">
             {error && <p className="rounded-md bg-red-50 p-2 text-sm text-red-600">{error}</p>}
             <Field label="Город" hint="Новости этого города публикуются в канал">
-              <select className="input" value={form.city_id ?? ""} onChange={(e) => upd({ city_id: Number(e.target.value) })}>
+              <Select value={form.city_id ?? ""} onChange={(v) => upd({ city_id: Number(v) })}>
                 <option value="" disabled>Выберите город</option>
                 {cities?.items.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+              </Select>
             </Field>
             <Field label="Название канала"><input className="input" value={form.title ?? ""} onChange={(e) => upd({ title: e.target.value })} /></Field>
             <Field label="Chat ID / @username" hint="Например -1001234567890 или @mychannel. Бот должен быть админом канала.">
               <input className="input font-mono" value={form.chat_id ?? ""} onChange={(e) => upd({ chat_id: e.target.value })} />
             </Field>
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="@username" hint="Заполняется кнопкой обновления из Telegram">
-                <input className="input" value={form.username ?? ""} onChange={(e) => upd({ username: e.target.value })} />
-              </Field>
-              <Field label="URL аватарки" hint="Берётся из Telegram; можно переопределить вручную">
-                <input className="input" value={form.avatar_url ?? ""} onChange={(e) => upd({ avatar_url: e.target.value })} />
-              </Field>
-            </div>
+            {/* @username and the avatar are parsed from Telegram automatically
+                (on page load and via the refresh button), so they are not
+                editable here. */}
             <div className="grid grid-cols-2 gap-4">
               <Field label="Topic ID" hint="Только для форум-групп (опционально)">
                 <input type="number" className="input" value={form.topic_id ?? ""} onChange={(e) => upd({ topic_id: e.target.value ? Number(e.target.value) : null })} />
@@ -180,19 +207,24 @@ export default function ChannelsPage() {
               </Field>
             </div>
             <Field label="Режим публикации">
-              <select className="input" value={form.publish_mode} onChange={(e) => upd({ publish_mode: e.target.value })}>
+              <Select value={form.publish_mode ?? "immediate"} onChange={(v) => upd({ publish_mode: v })}>
                 {MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-              </select>
+              </Select>
             </Field>
             <Field label="Шаблон" hint="Переопределяет шаблон города для этого канала">
-              <select className="input" value={form.template_id ?? ""} onChange={(e) => upd({ template_id: e.target.value ? Number(e.target.value) : null })}>
+              <Select
+                value={form.template_id ?? ""}
+                onChange={(v) => upd({ template_id: v ? Number(v) : null })}
+              >
                 <option value="">По умолчанию</option>
                 {templates?.items.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
+              </Select>
             </Field>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={form.is_active ?? true} onChange={(e) => upd({ is_active: e.target.checked })} /> Активен
-            </label>
+            <Checkbox
+              checked={form.is_active ?? true}
+              onChange={(v) => upd({ is_active: v })}
+              label="Активен"
+            />
             <div className="flex justify-end border-t border-border pt-4">
               <button className="btn-primary" onClick={save}>Сохранить</button>
             </div>

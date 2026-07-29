@@ -113,7 +113,9 @@ class NewsModerationService:
         from shared.services.settings_service import SettingsService
         from shared.services.telegram_admin import TelegramAdminService
 
-        tz_offset = int(await SettingsService(self.session).get("ui.timezone_offset_hours", 3))
+        cfg = SettingsService(self.session)
+        tz_offset = int(await cfg.get("ui.timezone_offset_hours", 3))
+        card_template = (await cfg.get("moderation.card_template", "")) or None
         return await TelegramAdminService().update_moderation_card(
             news,
             city,
@@ -124,6 +126,7 @@ class NewsModerationService:
             source_name=await self.resolve_source_name(news),
             moderator=await self.moderator_label(news.moderated_by),
             tz_offset=tz_offset,
+            template=card_template,
         )
 
     # ── published message sync ──────────────────────────────────────────────

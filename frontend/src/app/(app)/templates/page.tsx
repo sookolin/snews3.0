@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { Check, Copy, Pencil, Plus, Trash2, X } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
@@ -8,7 +8,9 @@ import type { Page } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal, Field } from "@/components/Modal";
 import { EmojiPickerButton } from "@/components/EmojiPickerButton";
-import { Checkbox } from "@/components/Controls";
+import { Checkbox, Select } from "@/components/Controls";
+import { useToast } from "@/components/Toast";
+import { confirm } from "@/components/ConfirmDialog";
 
 interface Template {
   id: number;
@@ -62,6 +64,8 @@ const HTML_TAGS = "<b>жирный</b> · <i>курсив</i> · <u>подчёр
 
 export default function TemplatesPage() {
   const { data, mutate } = useSWR<Page<Template>>("/templates?size=100", fetcher);
+  const { data: settingsData } = useSWR<Record<string, unknown>>("/settings", fetcher);
+  const [activeTab, setActiveTab] = useState<"templates" | "moderation">("templates");
   const [form, setForm] = useState<Partial<Template> | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +75,17 @@ export default function TemplatesPage() {
   const [editingVar, setEditingVar] = useState<string | null>(null);
   const [editKey, setEditKey] = useState("");
   const [editVal, setEditVal] = useState("");
+  // Moderation card template
+  const [modTemplate, setModTemplate] = useState<string>("");
+  const [modSaving, setModSaving] = useState(false);
+  const toast = useToast();
+
+  // Init moderation template from settings
+  useEffect(() => {
+    if (settingsData) {
+      setModTemplate(String(settingsData["moderation.card_template"] ?? ""));
+    }
+  }, [settingsData]);
 
   const openNew = () => { setForm({ ...EMPTY }); setPreview(null); setError(null); setEditingVar(null); };
   const openEdit = (t: Template) => { setForm({ ...t, variables: t.variables ?? {} }); setPreview(null); setError(null); setEditingVar(null); };
@@ -94,9 +109,14 @@ export default function TemplatesPage() {
   };
 
   const remove = async (id: number) => {
-    if (!confirm("Удалить шаблон?")) return;
-    await api(`/templates/${id}`, { method: "DELETE" });
-    mutate();
+    if (!(await confirm({ message: "Удалить шаблон?", danger: true }))) return;
+    try {
+      await api(`/templates/${id}`, { method: "DELETE" });
+      mutate();
+      toast.success("Шаблон удалён");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   };
 
   /** Duplicate a template so a variant can be built without retyping it. */
@@ -105,8 +125,9 @@ export default function TemplatesPage() {
       const copy = await api<Template>(`/templates/${id}/duplicate`, { method: "POST" });
       await mutate();
       openEdit(copy);
+      toast.success("Копия шаблона создана");
     } catch (e) {
-      alert((e as Error).message);
+      toast.error((e as Error).message);
     }
   };
 
@@ -142,12 +163,48 @@ export default function TemplatesPage() {
     setEditingVar(null);
   };
 
+  const saveModTemplate = async () => {
+    setModSaving(true);
+    try {
+      await api(`/settings/${encodeURIComponent("moderation.card_template")}`, {
+        method: "PUT",
+        body: JSON.stringify({ value: modTemplate }),
+      });
+      toast.success("Шаблон карточки сохранён");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setModSaving(false);
+    }
+  };
+
+  const TAB_CLASSES = (active: boolean) =>
+    `px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+      active
+        ? "border-primary text-primary"
+        : "border-transparent text-muted-foreground hover:text-foreground"
+    }`;
+
   return (
     <div>
-      <PageHeader title="Шаблоны" action={<button className="btn-primary" onClick={openNew}>Создать шаблон</button>} />
+      <PageHeader
+        title="Шаблоны"
+        action={activeTab === "templates" ? <button className="btn-primary" onClick={openNew}>Создать шаблон</button> : null}
+      />
 
-      <div className="grid gap-4 md:grid-cols-2">
-        {data?.items.map((t) => (
+      {/* Tabs */}
+      <div className="mb-5 flex gap-1 border-b border-border">
+        <button className={TAB_CLASSES(activeTab === "templates")} onClick={() => setActiveTab("templates")}>
+          Шаблоны публикаций
+        </button>
+        <button className={TAB_CLASSES(activeTab === "moderation")} onClick={() => setActiveTab("moderation")}>
+          Карточка модерации
+        </button>
+      </div>
+
+      {activeTab === "templates" && (
+        <div className="grid gap-4 md:grid-cols-2">
+          {data?.items.map((t) => (
           <div key={t.id} className="card p-5">
             <div className="mb-2 flex items-center justify-between">
               <h3 className="font-medium">{t.name}</h3>
@@ -176,7 +233,62 @@ export default function TemplatesPage() {
           </div>
         ))}
         {data && data.items.length === 0 && <p className="text-muted-foreground">Шаблонов нет. Создайте первый.</p>}
-      </div>
+        </div>
+      )}
+
+      {activeTab === "moderation" && (
+        <div className="max-w-3xl">
+          <div className="card">
+            <div className="border-b border-border px-5 py-3 font-medium">Шаблон карточки модерации</div>
+            <div className="space-y-4 p-5">
+              <div className="rounded-md bg-blue-50 p-3 text-xs text-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
+                <div className="mb-2 font-semibold">Плейсхолдеры:</div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+                  {[
+                    ["{post}", "Текст новости"],
+                    ["{title}", "Заголовок"],
+                    ["{id}", "ID новости"],
+                    ["{place}", "Место (город + регион)"],
+                    ["{city}", "Название города"],
+                    ["{score}", "Релевантность (0–1)"],
+                    ["{source}", "Название источника"],
+                    ["{source_time}", "Время источника"],
+                    ["{processed_at}", "Время обработки"],
+                    ["{moderator}", "Кто модерирует"],
+                    ["{reply_to}", "Reply to ID"],
+                    ["{status}", "Статус новости"],
+                    ["{url}", "Ссылка на оригинал"],
+                  ].map(([tag, desc]) => (
+                    <div key={tag}>
+                      <span className="font-mono font-semibold">{tag}</span> — {desc}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 text-muted-foreground">
+                  Пусто — используется встроенный вид карточки.
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium">Шаблон</label>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Telegram HTML. Пусто — встроенный формат карточки.
+                </p>
+                <textarea
+                  className="input mt-1 min-h-[280px] w-full font-mono text-xs"
+                  value={modTemplate}
+                  onChange={(e) => setModTemplate(e.target.value)}
+                  placeholder={"<b>{title}</b>\n\n{post}\n\n🏙 {city} · ⚡ {score}\n🔗 {url}"}
+                />
+              </div>
+              <div className="flex justify-end border-t border-border pt-4">
+                <button className="btn-primary" disabled={modSaving} onClick={saveModTemplate}>
+                  {modSaving ? "Сохранение…" : "Сохранить"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <Modal open={!!form} onClose={() => setForm(null)} title={form?.id ? "Редактировать шаблон" : "Новый шаблон"} wide>
         {form && (
@@ -198,22 +310,22 @@ export default function TemplatesPage() {
             <div className="grid grid-cols-2 gap-4">
               <Field label="Название"><input className="input" value={form.name ?? ""} onChange={(e) => upd({ name: e.target.value })} /></Field>
               <Field label="Формат">
-                <select className="input" value={form.format} onChange={(e) => upd({ format: e.target.value })}>
+                <Select value={form.format ?? "telegram_html"} onChange={(v) => upd({ format: v })}>
                   <option value="telegram_html">Telegram HTML</option>
                   <option value="html">HTML</option>
                   <option value="markdown">Markdown</option>
-                </select>
+                </Select>
               </Field>
             </div>
 
             <Field label="Заголовок (header)" hint="Верхняя строка. Напр. {emoji} <b>{title}</b>">
-              <textarea className="input font-mono" value={form.header ?? ""} onChange={(e) => upd({ header: e.target.value })} />
+              <textarea className="input input-compact font-mono" value={form.header ?? ""} onChange={(e) => upd({ header: e.target.value })} />
             </Field>
             <Field label="Тело (body)">
-              <textarea className="input min-h-[80px] font-mono" value={form.body ?? ""} onChange={(e) => upd({ body: e.target.value })} />
+              <textarea className="input min-h-[240px] font-mono" value={form.body ?? ""} onChange={(e) => upd({ body: e.target.value })} />
             </Field>
             <Field label="Футер (footer)">
-              <textarea className="input min-h-[80px] font-mono" value={form.footer ?? ""} onChange={(e) => upd({ footer: e.target.value })} />
+              <textarea className="input input-compact font-mono" value={form.footer ?? ""} onChange={(e) => upd({ footer: e.target.value })} />
             </Field>
 
             <div className="grid grid-cols-2 gap-4">

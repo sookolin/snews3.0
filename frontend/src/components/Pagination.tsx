@@ -1,7 +1,6 @@
 "use client";
 
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { Select } from "@/components/Controls";
 
 /** Page-size options offered in every paginated table. */
 export const PAGE_SIZES = [20, 50, 100, 200];
@@ -12,26 +11,33 @@ interface Props {
   total: number;
   onPage: (page: number) => void;
   onSize: (size: number) => void;
+  /** ``top`` renders above the table (no top margin), ``bottom`` below it. */
+  position?: "top" | "bottom";
 }
 
 /**
- * Table footer with a configurable page size and page stepping.
+ * Page-size selector + page stepping. Rendered both above and below every
+ * table so long lists can be paged without scrolling back down.
  * Resets to page 1 whenever the size changes so the offset stays valid.
  */
-export function Pagination({ page, size, total, onPage, onSize }: Props) {
+export function Pagination({ page, size, total, onPage, onSize, position = "bottom" }: Props) {
   const pages = Math.max(1, Math.ceil(total / size));
   const from = total === 0 ? 0 : (page - 1) * size + 1;
   const to = Math.min(page * size, total);
 
   return (
-    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm">
+    <div
+      className={`flex flex-wrap items-center justify-between gap-3 text-sm ${
+        position === "top" ? "mb-3" : "mt-3"
+      }`}
+    >
       <div className="flex items-center gap-2 text-muted-foreground">
         <span>На странице</span>
-        <Select
-          className="w-[92px]"
-          value={String(size)}
-          onChange={(v) => {
-            onSize(Number(v));
+        <select
+          className="input w-[92px] cursor-pointer"
+          value={size}
+          onChange={(e) => {
+            onSize(Number(e.target.value));
             onPage(1);
           }}
         >
@@ -40,8 +46,8 @@ export function Pagination({ page, size, total, onPage, onSize }: Props) {
               {s}
             </option>
           ))}
-        </Select>
-        <span>
+        </select>
+        <span className="whitespace-nowrap">
           {from}–{to} из {total}
         </span>
       </div>

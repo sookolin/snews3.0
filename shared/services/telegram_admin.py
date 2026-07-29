@@ -213,7 +213,39 @@ class TelegramAdminService:
         )
 
         # Buttons carry full text labels (icons alone were unclear).
-        if is_published or news.status == NewsStatus.WITHDRAWN:
+        if not is_published and news.status in (NewsStatus.APPROVED, NewsStatus.SCHEDULED):
+            # Decided but not yet in the channel: allow pushing it out now,
+            # taking the decision back, or removing the item entirely.
+            rows = [
+                [
+                    button(
+                        "⚡️ Опубликовать сразу",
+                        style="success",
+                        callback_data=f"mod:now:{news.id}",
+                    ),
+                    button("❌ Отклонить", style="danger", callback_data=f"mod:reject:{news.id}"),
+                ],
+                [
+                    button("✏️ Редактировать", style="primary", **edit_kwargs),
+                    button("🗑 Удалить", style="danger", callback_data=f"mod:delete:{news.id}"),
+                ],
+            ]
+        elif not is_published and news.status == NewsStatus.REJECTED:
+            # Rejected items keep a way back: approve again or delete for good.
+            rows = [
+                [
+                    button("✅ Одобрить", style="success", callback_data=f"mod:approve:{news.id}"),
+                    button("✏️ Редактировать", style="primary", **edit_kwargs),
+                ],
+                [
+                    button(
+                        "🗑 Удалить полностью",
+                        style="danger",
+                        callback_data=f"mod:purge:{news.id}",
+                    )
+                ],
+            ]
+        elif is_published or news.status == NewsStatus.WITHDRAWN:
             # Already handled: allow withdrawing / re-publishing / full removal.
             rows = [
                 [button("✏️ Редактировать", style="primary", **edit_kwargs)],
@@ -235,7 +267,8 @@ class TelegramAdminService:
                             "📤 Опубликовать снова",
                             style="success",
                             callback_data=f"mod:approve:{news.id}",
-                        )
+                        ),
+                        button("🌐 Во все каналы", callback_data=f"mod:all:{news.id}"),
                     ]
                 )
             rows.append(
@@ -276,12 +309,12 @@ class TelegramAdminService:
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     @staticmethod
-    def _first_media_input(news: News):  # type: ignore[no-untyped-def]
-        """Return an uploadable object for the first photo attachment, if any.
+    def _media_inputs(news: News, limit: int = 3) -> tuple[list[tuple[object, str]], int]:
+        """Uploadable previews for the first ``limit`` photos/videos.
 
-        Only photos are previewed on the card: videos/documents would make the
-        card heavy, and the point is a quick visual check before approving.
-        ``news.media`` must already be loaded by the caller.
+        Returns ``(items, total)`` where ``items`` are ``(file, type)`` pairs and
+        ``total`` is how many enabled attachments the news has in total, so the
+        card can say how many are only visible on the site.
         """
         import os
 
@@ -289,13 +322,17 @@ class TelegramAdminService:
         from shared.enums import MediaType
 
         try:
-            assets = list(news.media or [])
+            assets = [a for a in (news.media or []) if a.is_enabled]
         except Exception:  # noqa: BLE001 - relationship not loaded
-            return None
+            return [], 0
 
+        items: list[tuple[object, str]] = []
         for asset in sorted(assets, key=lambda a: a.position or 0):
-            if not asset.is_enabled or asset.type != MediaType.PHOTO:
+            if len(items) >= limit:
+                break
+            if asset.type not in (MediaType.PHOTO, MediaType.VIDEO):
                 continue
+            file: object | None = None
             path = asset.processed_path or asset.file_path
             if path:
                 abs_path = (
@@ -304,14 +341,16 @@ class TelegramAdminService:
                 if os.path.exists(abs_path):
                     from aiogram.types import FSInputFile
 
-                    return FSInputFile(abs_path)
-            if asset.telegram_file_id:
-                return asset.telegram_file_id
-            if asset.remote_url:
+                    file = FSInputFile(abs_path)
+            if file is None and asset.telegram_file_id:
+                file = asset.telegram_file_id
+            if file is None and asset.remote_url:
                 from aiogram.types import URLInputFile
 
-                return URLInputFile(asset.remote_url)
-        return None
+                file = URLInputFile(asset.remote_url)
+            if file is not None:
+                items.append((file, "video" if asset.type == MediaType.VIDEO else "photo"))
+        return items, len(assets)
 
     @staticmethod
     def build_card_body(
@@ -322,6 +361,7 @@ class TelegramAdminService:
         source_name: str = "",
         moderator: str | None = None,
         tz_offset: int = 3,
+        template: str | None = None,
     ) -> str:
         """Build the moderation card text.
 
@@ -376,7 +416,31 @@ class TelegramAdminService:
         tags = [STATUS_TAGS.get(news.status.value, news.status.value)]
         if news.is_edited:
             tags.append("✏️ изменено")
-        info.append("Статус: " + " · ".join(tags))
+        status = " · ".join(tags)
+        info.append("Статус: " + status)
+
+        if template:
+            values = {
+                "post": post,
+                "id": str(news.id),
+                "place": place,
+                "city": city.name,
+                "score": score,
+                "source_time": fmt(news.source_published_at),
+                "processed_at": fmt(news.processed_at),
+                "moderator": moderator or "—",
+                "reply_to": str(news.reply_to_news_id or ""),
+                "status": status,
+                "title": f"{emoji} {title}".strip(),
+                "url": news.original_url or "",
+                "source": source_name or "",
+            }
+            out = template
+            for key, value in values.items():
+                out = out.replace("{" + key + "}", value)
+            # Drop lines whose only placeholder resolved to nothing.
+            lines = [ln for ln in out.split("\n") if ln.strip() not in ("", "—")]
+            return "\n".join(lines)
 
         return f"{post}\n\n" + "\n".join(info)
 
@@ -390,18 +454,21 @@ class TelegramAdminService:
         source_name: str = "",
         tz_offset: int = 3,
         topic_id: int | None = None,
+        template: str | None = None,
     ) -> int | None:
         """Send the moderation card to a topic. Returns the message id.
 
         ``topic_id`` overrides the city's topic — used to route world news into
-        their own dedicated topic.
+        their own dedicated topic. ``template`` is the configurable card layout
+        (``settings.moderation.card_template``); ``None`` = built-in layout.
         """
         if not self.group_id:
             return None
         bot = self._bot()
         try:
             body = self.build_card_body(
-                news, city, rendered=rendered, source_name=source_name, tz_offset=tz_offset
+                news, city, rendered=rendered, source_name=source_name, tz_offset=tz_offset,
+                template=template,
             )
             common: dict = {"chat_id": self.group_id}
             thread = topic_id or city.telegram_topic_id
@@ -409,12 +476,35 @@ class TelegramAdminService:
                 common["message_thread_id"] = thread
             keyboard = self.build_moderation_keyboard(news, lang)
 
-            # Show the first attachment right on the card so moderators can see
-            # what will be published (media are attached to the news itself).
-            media_file = self._first_media_input(news)
-            if media_file is not None:
-                message = await bot.send_photo(
-                    photo=media_file,
+            # Show a few attachments right on the card so moderators can see
+            # what will be published; the rest stay on the site to keep the
+            # topic light.
+            previews, total = self._media_inputs(news)
+            if total > len(previews):
+                body += f"\n📎 Вложений: {total}. Остальные — на сайте."
+            if len(previews) > 1:
+                from aiogram.types import InputMediaPhoto, InputMediaVideo
+
+                album: list = []
+                for file, kind in previews:
+                    cls = InputMediaVideo if kind == "video" else InputMediaPhoto
+                    album.append(cls(media=file))
+                album_msgs = await bot.send_media_group(media=album, **common)
+                # An album cannot carry a caption+keyboard that stay editable, so
+                # the card itself is the text message replying to the previews.
+                message = await bot.send_message(
+                    text=body,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                    reply_markup=keyboard,
+                    reply_to_message_id=album_msgs[0].message_id,
+                    **common,
+                )
+            elif previews:
+                file, kind = previews[0]
+                send = bot.send_video if kind == "video" else bot.send_photo
+                message = await send(
+                    **{kind: file},
                     caption=body[:1024],
                     parse_mode="HTML",
                     reply_markup=keyboard,
@@ -448,6 +538,7 @@ class TelegramAdminService:
         source_name: str = "",
         moderator: str | None = None,
         tz_offset: int = 3,
+        template: str | None = None,
     ) -> bool:
         """Rewrite an existing moderation card after a decision.
 
@@ -461,7 +552,7 @@ class TelegramAdminService:
         try:
             body = self.build_card_body(
                 news, city, rendered=rendered, source_name=source_name, moderator=moderator,
-                tz_offset=tz_offset,
+                tz_offset=tz_offset, template=template,
             )
             full = f"{body}\n{status_line}"
             keyboard = self.build_moderation_keyboard(news, lang) if keep_buttons else None

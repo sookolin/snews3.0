@@ -7,6 +7,10 @@ import type { City, Page } from "@/lib/types";
 import { Copy, Pencil, PlugZap, RefreshCw, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal, Field } from "@/components/Modal";
+import { Checkbox, Select } from "@/components/Controls";
+import { ResizableTable } from "@/components/ResizableTable";
+import { useToast } from "@/components/Toast";
+import { confirm } from "@/components/ConfirmDialog";
 
 interface CityForm {
   id?: number;
@@ -20,12 +24,21 @@ interface CityForm {
   language: string;
   is_active: boolean;
   telegram_topic_id?: number | null;
+  kind: string;
+  is_world_bucket: boolean;
 }
 
 const EMPTY: CityForm = {
   name: "", description: "", keywords: "", extra_keywords: "", exclude_keywords: "",
   region: "", country: "", language: "ru", is_active: true, telegram_topic_id: null,
+  kind: "city", is_world_bucket: false,
 };
+
+/** "other" entries are non-geographic sections: мир, интернет, спорт и т.п. */
+const KINDS = [
+  { value: "city", label: "Город" },
+  { value: "other", label: "Другое (мир, интернет…)" },
+];
 
 const toArr = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 const fromArr = (a?: string[]) => (a ?? []).join(", ");
@@ -36,6 +49,9 @@ export default function CitiesPage() {
   const botUsername = String(settings?.["bot.username"] ?? "").replace(/^@/, "");
   const [form, setForm] = useState<CityForm | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [worldTopicName, setWorldTopicName] = useState("🌍 Мировые новости");
+  const [worldTopicModalOpen, setWorldTopicModalOpen] = useState(false);
+  const toast = useToast();
 
   const openNew = () => { setForm({ ...EMPTY }); setError(null); };
   const openEdit = (c: City) => {
@@ -45,6 +61,7 @@ export default function CitiesPage() {
       exclude_keywords: fromArr(c.exclude_keywords), region: c.region ?? "",
       country: c.country ?? "", language: c.language, is_active: c.is_active,
       telegram_topic_id: c.telegram_topic_id,
+      kind: c.kind ?? "city", is_world_bucket: c.is_world_bucket ?? false,
     });
     setError(null);
   };
@@ -64,56 +81,101 @@ export default function CitiesPage() {
       language: form.language,
       is_active: form.is_active,
       telegram_topic_id: form.telegram_topic_id ?? null,
+      kind: form.kind,
+      // Only a non-geographic entry can collect world / unmatched news.
+      is_world_bucket: form.kind === "other" ? form.is_world_bucket : false,
     };
     try {
       if (form.id) await api(`/cities/${form.id}`, { method: "PATCH", body: JSON.stringify(body) });
       else await api("/cities", { method: "POST", body: JSON.stringify(body) });
       setForm(null);
       mutate();
-    } catch (e) { setError((e as Error).message); }
+      toast.success(form.id ? "Раздел обновлён" : "Раздел создан");
+    } catch (e) {
+      setError((e as Error).message);
+      toast.error((e as Error).message);
+    }
   };
 
   const remove = async (id: number) => {
-    if (!confirm("Удалить город?")) return;
-    await api(`/cities/${id}`, { method: "DELETE" });
-    mutate();
+    if (!(await confirm({ message: "Удалить раздел?", danger: true }))) return;
+    try {
+      await api(`/cities/${id}`, { method: "DELETE" });
+      mutate();
+      toast.success("Раздел удалён");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   };
 
   const recreateTopic = async (id: number) => {
-    try { await api(`/cities/${id}/create-topic`, { method: "POST" }); mutate(); }
-    catch (e) { alert((e as Error).message); }
+    try {
+      await api(`/cities/${id}/create-topic`, { method: "POST" });
+      mutate();
+      toast.success("Топик пересоздан");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   };
 
   const testTopic = async (id: number) => {
     try {
       const r = await api<{ detail: string }>(`/cities/${id}/test-topic`, { method: "POST" });
-      alert("Топик привязан: " + r.detail);
+      toast.success("Топик привязан: " + r.detail);
     } catch (e) {
-      alert("Ошибка: " + (e as Error).message);
+      toast.error("Ошибка: " + (e as Error).message);
+    }
+  };
+
+  const createWorldTopic = async () => {
+    try {
+      const r = await api<{ topic_id: number }>("/settings/world-topic", {
+        method: "POST",
+        body: JSON.stringify({ name: worldTopicName }),
+      });
+      setWorldTopicModalOpen(false);
+      mutate();
+      toast.success(`Топик мировых новостей создан (ID ${r.topic_id})`);
+    } catch (e) {
+      toast.error((e as Error).message);
     }
   };
 
   return (
     <div>
-      <PageHeader title="Города" action={<button className="btn-primary" onClick={openNew}>Добавить город</button>} />
+      <PageHeader
+        title="Города и разделы"
+        action={
+          <div className="flex gap-2">
+            <button className="btn-outline" onClick={() => setWorldTopicModalOpen(true)}>
+              Создать топик «Мировые»
+            </button>
+            <button className="btn-primary" onClick={openNew}>Добавить раздел</button>
+          </div>
+        }
+      />
 
       <div className="card overflow-hidden">
         <div className="table-wrap">
-        <table className="w-full text-sm">
-          <thead className="bg-muted text-left text-muted-foreground">
-            <tr>
-              <th className="px-4 py-3">Название</th>
-              <th className="px-4 py-3">Ключевые слова</th>
-              <th className="px-4 py-3">Topic ID</th>
-              <th className="px-4 py-3">Ссылка для предложки</th>
-              <th className="px-4 py-3">Активен</th>
-              <th className="px-4 py-3 text-right">Действия</th>
-            </tr>
-          </thead>
-          <tbody>
+        <ResizableTable
+          id="cities"
+          columns={[
+            "Название",
+            "Тип",
+            "Ключевые слова",
+            "Topic ID",
+            "Ссылка для предложки",
+            "Активен",
+            "Действия",
+          ]}
+        >
             {data?.items.map((c) => (
               <tr key={c.id} className="border-t border-border">
                 <td className="px-4 py-3 font-medium">{c.name}</td>
+                <td className="px-4 py-3 text-xs text-muted-foreground">
+                  {c.kind === "other" ? "Другое" : "Город"}
+                  {c.is_world_bucket && <span className="ml-1" title="Собирает мировые новости">🌍</span>}
+                </td>
                 <td className="px-4 py-3 text-muted-foreground">{c.keywords.join(", ") || "—"}</td>
                 <td className="px-4 py-3">{c.telegram_topic_id ?? "—"}</td>
                 <td className="px-4 py-3">
@@ -134,7 +196,7 @@ export default function CitiesPage() {
                           navigator.clipboard.writeText(
                             `https://t.me/${botUsername}?start=suggest_${c.id}`
                           );
-                          alert("Ссылка скопирована");
+                          toast.info("Ссылка скопирована");
                         }}
                       >
                         <Copy className="h-3 w-3" />
@@ -146,7 +208,7 @@ export default function CitiesPage() {
                 </td>
                 <td className="px-4 py-3">{c.is_active ? "Да" : "Нет"}</td>
                 <td className="px-4 py-3">
-                  <div className="flex justify-end gap-2">
+                  <div className="flex justify-center gap-2">
                     <button className="btn-icon" title="Изменить" onClick={() => openEdit(c)}>
                       <Pencil className="h-4 w-4" />
                     </button>
@@ -163,18 +225,39 @@ export default function CitiesPage() {
                 </td>
               </tr>
             ))}
-          </tbody>
-        </table>
+        </ResizableTable>
         </div>
       </div>
 
-      <Modal open={!!form} onClose={() => setForm(null)} title={form?.id ? "Редактировать город" : "Новый город"} wide>
+      <Modal open={!!form} onClose={() => setForm(null)} title={form?.id ? "Редактировать раздел" : "Новый раздел"} wide>
         {form && (
           <div className="space-y-4">
             {error && <p className="rounded-md bg-red-50 p-2 text-sm text-red-600 dark:bg-red-950/40">{error}</p>}
-            <Field label="Название" hint="Название города — используется в шаблоне {city} и как ключевое слово">
+            <Field label="Тип раздела" hint="«Другое» — для негеографических разделов: мир, интернет и т.п.">
+              <Select value={form.kind} onChange={(v) => upd({ kind: v })}>
+                {KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
+              </Select>
+            </Field>
+            <Field label="Название" hint="Используется в шаблоне {city} и как ключевое слово">
               <input className="input" value={form.name} onChange={(e) => upd({ name: e.target.value })} />
             </Field>
+            {form.kind === "other" && (
+              <div className="flex items-start gap-2 text-sm">
+                <div className="mt-0.5">
+                  <Checkbox
+                    checked={form.is_world_bucket}
+                    onChange={(v) => upd({ is_world_bucket: v })}
+                  />
+                </div>
+                <span>
+                  Собирать мировые новости
+                  <span className="block text-xs text-muted-foreground">
+                    Новости, не подошедшие ни к одному городу, попадут сюда, а не в первый город.
+                    Такой раздел может быть только один.
+                  </span>
+                </span>
+              </div>
+            )}
             <Field label="Описание" hint="Необязательно, для внутренних заметок">
               <textarea className="input" value={form.description} onChange={(e) => upd({ description: e.target.value })} />
             </Field>
@@ -193,23 +276,47 @@ export default function CitiesPage() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Язык" hint="Язык публикаций и AI-обработки">
-                <select className="input" value={form.language} onChange={(e) => upd({ language: e.target.value })}>
+                <Select value={form.language} onChange={(v) => upd({ language: v })}>
                   <option value="ru">ru</option>
                   <option value="en">en</option>
-                </select>
+                </Select>
               </Field>
               <Field label="Topic ID" hint="ID ветки в группе модерации Telegram. Создаётся автоматически, но можно задать вручную.">
                 <input className="input" type="number" value={form.telegram_topic_id ?? ""} onChange={(e) => upd({ telegram_topic_id: e.target.value ? Number(e.target.value) : null })} />
               </Field>
             </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={form.is_active} onChange={(e) => upd({ is_active: e.target.checked })} /> Активен (собирать новости)
-            </label>
+            <Checkbox
+              checked={form.is_active}
+              onChange={(v) => upd({ is_active: v })}
+              label="Активен (собирать новости)"
+            />
             <div className="flex justify-end border-t border-border pt-4">
               <button className="btn-primary" onClick={save}>Сохранить</button>
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* World topic creation modal */}
+      <Modal
+        open={worldTopicModalOpen}
+        onClose={() => setWorldTopicModalOpen(false)}
+        title="Создать топик для мировых новостей"
+      >
+        <div className="space-y-4">
+          <Field label="Название топика" hint="Будет отображаться в группе модерации Telegram">
+            <input
+              className="input"
+              value={worldTopicName}
+              onChange={(e) => setWorldTopicName(e.target.value)}
+            />
+          </Field>
+          <div className="flex justify-end border-t border-border pt-4">
+            <button className="btn-primary" onClick={createWorldTopic}>
+              Создать
+            </button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

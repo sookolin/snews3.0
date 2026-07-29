@@ -84,7 +84,7 @@ export default function ComposePage() {
 
         <Field label="Текст" hint="Разметку и оформление можно будет добавить в редакторе">
           <textarea
-            className="input min-h-[160px]"
+            className="input min-h-[280px]"
             value={text}
             onChange={(e) => setText(e.target.value)}
           />

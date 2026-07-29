@@ -20,6 +20,7 @@ class TemplateBase(BaseModel):
     footer: str = 'Источник: {source}\n————————\n👉 <a href="{link}">Подписаться</a>'
     separator: str = "\n\n"
     custom_emoji_id: str | None = None
+    custom_emoji_fallback: str | None = None
     subscribe_link: str | None = None
     variables: dict = Field(default_factory=dict)
     disable_web_preview: bool = True
@@ -40,6 +41,7 @@ class TemplateUpdate(BaseModel):
     footer: str | None = None
     separator: str | None = None
     custom_emoji_id: str | None = None
+    custom_emoji_fallback: str | None = None
     subscribe_link: str | None = None
     variables: dict | None = None
     disable_web_preview: bool | None = None
@@ -57,6 +59,7 @@ class TemplateOut(ORMModel):
     footer: str
     separator: str
     custom_emoji_id: str | None
+    custom_emoji_fallback: str | None = None
     subscribe_link: str | None
     variables: dict
     disable_web_preview: bool

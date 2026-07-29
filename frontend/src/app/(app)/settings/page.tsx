@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
+import { Checkbox } from "@/components/Controls";
+import { useToast } from "@/components/Toast";
 
 // Human-readable labels/descriptions for known settings keys.
 const META: Record<string, { label: string; hint: string; group: string }> = {
@@ -114,7 +116,7 @@ const META: Record<string, { label: string; hint: string; group: string }> = {
     label: "Topic ID мировых новостей",
     hint:
       "Отдельная ветка в группе модерации для новостей, не относящихся ни к одному городу. " +
-      "Создаётся кнопкой ниже или задаётся вручную.",
+      "Создайте через кнопку в разделе «Города и разделы».",
     group: "Telegram",
   },
   "ui.default_language": {
@@ -134,12 +136,16 @@ const META: Record<string, { label: string; hint: string; group: string }> = {
   },
 };
 
+/** Settings whose value is a multi-line template, not a short field. */
+const MULTILINE = new Set(["moderation.card_template"]);
+
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
+  const toast = useToast();
 
   const load = async () => {
     try {
@@ -180,18 +186,6 @@ export default function SettingsPage() {
 
   const hasChanges = Object.keys(dirty).some((k) => dirty[k] !== settings[k]);
 
-  /** Create the dedicated moderation topic for world news (like a city topic). */
-  const createWorldTopic = async () => {
-    setError(null);
-    try {
-      const r = await api<{ topic_id: number }>("/settings/world-topic", { method: "POST" });
-      await load();
-      alert(`Топик мировых новостей создан (ID ${r.topic_id})`);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-
   // Group settings by their META group (fallback: "Прочее").
   const groups: Record<string, string[]> = {};
   for (const key of Object.keys(settings)) {
@@ -226,18 +220,28 @@ export default function SettingsPage() {
                 const value = dirty[key];
                 const isBool = typeof settings[key] === "boolean";
                 const isNum = typeof settings[key] === "number";
+                const isLong = MULTILINE.has(key);
                 return (
-                  <div key={key} className="flex items-center gap-4 p-4">
+                  <div
+                    key={key}
+                    className={
+                      isLong ? "space-y-2 p-4" : "flex items-center gap-4 p-4"
+                    }
+                  >
                     <div className="flex-1">
                       <div className="text-sm font-medium">{meta?.label ?? key}</div>
                       <div className="text-xs text-muted-foreground">{meta?.hint ?? key}</div>
                     </div>
                     {isBool ? (
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={Boolean(value)}
-                        onChange={(e) => setValue(key, e.target.checked)}
-                        className="h-5 w-5"
+                        onChange={(v) => setValue(key, v)}
+                      />
+                    ) : isLong ? (
+                      <textarea
+                        className="input min-h-[220px] font-mono text-xs"
+                        value={value === null || value === undefined ? "" : String(value)}
+                        onChange={(e) => setValue(key, e.target.value)}
                       />
                     ) : (
                       <input
@@ -254,13 +258,10 @@ export default function SettingsPage() {
                 );
               })}
             </div>
-            {group === "Telegram" && (
+            {group === "Telegram" && keys.some((k) => k === "telegram.world_topic_id") && (
               <div className="flex items-center gap-3 border-t border-border px-4 py-3">
-                <button className="btn-outline" onClick={createWorldTopic}>
-                  Создать топик мировых новостей
-                </button>
                 <span className="text-xs text-muted-foreground">
-                  Группа модерации должна быть форумом, а бот — её администратором.
+                  Для создания топика перейдите в раздел «Города и разделы».
                 </span>
               </div>
             )}

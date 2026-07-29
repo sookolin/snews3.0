@@ -27,6 +27,27 @@ _TELEGRAM_CAPTION_LIMIT = 1024
 _TELEGRAM_TEXT_LIMIT = 4096
 
 
+#: Fragments of Telegram error messages that really mean "you may not use this
+#: custom emoji". Only these justify dropping the premium emoji from the post —
+#: any other failure (bad file, caption too long, flood wait) must be reported
+#: as-is instead of silently publishing a downgraded version.
+_EMOJI_ERROR_MARKERS = (
+    "custom_emoji",
+    "custom emoji",
+    "emoji_invalid",
+    "invalid emoji",
+    "not enough rights to send custom emoji",
+    "message entities",
+    "entity",
+)
+
+
+def _is_custom_emoji_error(error: str | None) -> bool:
+    """Whether a Telegram error is about the custom emoji entity."""
+    low = (error or "").lower()
+    return any(marker in low for marker in _EMOJI_ERROR_MARKERS)
+
+
 def strip_custom_emoji(text: str) -> str:
     """Replace ``<tg-emoji …>X</tg-emoji>`` with its fallback character ``X``.
 
@@ -137,7 +158,11 @@ class TelegramPublisher(BasePublisher):
         character.
         """
         result = await self._publish(request)
-        if not result.success and "<tg-emoji" in (request.text or ""):
+        if (
+            not result.success
+            and "<tg-emoji" in (request.text or "")
+            and _is_custom_emoji_error(result.error)
+        ):
             log.warning(
                 "retry_without_custom_emoji", channel=self.channel.id, error=result.error
             )
@@ -194,8 +219,12 @@ class TelegramPublisher(BasePublisher):
                 caption_used = False
                 for group in groups:
                     caption = None if (caption_used or not caption_fits) else text
+                    # Everything past the first album is attached as a reply to
+                    # the first message, so >10 attachments read as one post
+                    # instead of a wall of unrelated albums.
+                    target = common if not message_ids else self._reply_to(common, message_ids[0])
                     ids = await self._send_group(
-                        bot, group, caption, common,
+                        bot, group, caption, target,
                         keyboard if (not caption_used and caption_fits) else None,
                     )
                     message_ids.extend(ids)
@@ -207,7 +236,7 @@ class TelegramPublisher(BasePublisher):
                         parse_mode=ParseMode.HTML,
                         disable_web_page_preview=request.disable_web_preview,
                         reply_markup=keyboard,
-                        **common,
+                        **(self._reply_to(common, message_ids[0]) if message_ids else common),
                     )
                     message_ids.append(msg.message_id)
 
@@ -235,6 +264,11 @@ class TelegramPublisher(BasePublisher):
             return PublishResult(success=False, error=str(exc))
         finally:
             await bot.session.close()
+
+    @staticmethod
+    def _reply_to(common: dict, message_id: int) -> dict:
+        """Copy of ``common`` that replies to ``message_id``."""
+        return {**common, "reply_to_message_id": message_id}
 
     @staticmethod
     def _split_media_groups(media: list[MediaAsset]) -> list[list[MediaAsset]]:

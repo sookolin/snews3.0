@@ -42,8 +42,7 @@ class Template(Base, TimestampMixin):
     )
     separator: Mapped[str] = mapped_column(String(64), default="\n\n", nullable=False)
 
-    # Custom emoji / subscribe link / extra variables
-    custom_emoji_id: Mapped[str | None] = mapped_column(String(64))
+    # Custom subscribe link / extra variables
     subscribe_link: Mapped[str | None] = mapped_column(String(2048))
     variables: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 

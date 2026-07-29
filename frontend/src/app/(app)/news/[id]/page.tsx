@@ -15,6 +15,8 @@ import { YandexMapPicker } from "@/components/YandexMapPicker";
 import { RichTextEditor } from "@/components/RichTextEditor";
 import { EmojiPickerButton } from "@/components/EmojiPickerButton";
 import { Checkbox, Select } from "@/components/Controls";
+import { useToast } from "@/components/Toast";
+import { confirm } from "@/components/ConfirmDialog";
 
 interface NewsDetail extends NewsItem {
   text?: string;
@@ -61,6 +63,7 @@ export default function NewsEditorPage() {
   const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showMap, setShowMap] = useState(false);
+  const toast = useToast();
 
   const { data: templates } = useSWR<Page<Template>>("/templates?size=100", fetcher);
   const { data: users } = useSWR<Page<UserRef>>("/users?size=200", fetcher);
@@ -198,17 +201,18 @@ export default function NewsEditorPage() {
 
   /** Publish this single item to the channels of every active city. */
   const publishAllCities = async () => {
-    if (!confirm("Опубликовать эту новость во все каналы всех городов?")) return;
+    if (!(await confirm({ message: "Опубликовать эту новость во все каналы всех городов?", danger: true }))) return;
     setSaving(true);
     try {
       await save();
       const r = await api<{ detail: string }>(`/news/${id}/publish-all-cities`, {
         method: "POST",
       });
-      alert(r.detail);
+      toast.success(r.detail);
       await load();
     } catch (e) {
       setError((e as Error).message);
+      toast.error((e as Error).message);
     } finally {
       setSaving(false);
     }
@@ -216,7 +220,7 @@ export default function NewsEditorPage() {
 
   /** Delete everywhere: channels, moderation topic and the admin panel. */
   const removeCompletely = async () => {
-    if (!confirm("Удалить полностью — из каналов, топика и админки?")) return;
+    if (!(await confirm({ message: "Удалить полностью — из каналов, топика и админки?", danger: true }))) return;
     setSaving(true);
     try {
       await api(`/news/${id}`, { method: "DELETE" });
@@ -230,7 +234,7 @@ export default function NewsEditorPage() {
 
   /** Withdraw an already published post so it can be edited/republished. */
   const unpublish = async () => {
-    if (!confirm("Снять публикацию? Сообщение будет удалено из Telegram-канала.")) return;
+    if (!(await confirm({ message: "Снять публикацию? Сообщение будет удалено из Telegram-канала.", danger: true }))) return;
     setSaving(true);
     try {
       await api(`/news/${id}/unpublish`, { method: "POST" });
@@ -285,7 +289,7 @@ export default function NewsEditorPage() {
           {/* Original (pre-AI) text, read-only */}
           <label className="block">
             <span className="text-sm text-muted-foreground">Исходный текст (до AI)</span>
-            <textarea className="input mt-1 min-h-[80px] bg-muted/50 font-mono text-xs" value={news.original_text ?? ""} readOnly />
+            <textarea className="input mt-1 min-h-[220px] bg-muted/50 font-mono text-xs" value={news.original_text ?? ""} readOnly />
           </label>
 
           <div className="flex items-center justify-between">

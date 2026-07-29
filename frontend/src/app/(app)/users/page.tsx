@@ -1,13 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import useSWR from "swr";
-import { Pencil, Trash2 } from "lucide-react";
+import Link from "next/link";
+import { Eye, Pencil, Tags, Trash2, UserCircle } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
 import type { Page, User } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal, Field } from "@/components/Modal";
 import { Checkbox, Select } from "@/components/Controls";
+import { ResizableTable } from "@/components/ResizableTable";
+import { confirm } from "@/components/ConfirmDialog";
+import { useToast } from "@/components/Toast";
+import { ROLE_ORDER, getPreviewRole, setPreviewRole } from "@/lib/roles";
+
+const DEFAULT_ROLE_COLORS: Record<string, string> = {
+  super_admin: "#6366f1",
+  admin:       "#0ea5e9",
+  moderator:   "#f59e0b",
+  editor:      "#10b981",
+  reviewer:    "#94a3b8",
+};
 
 interface PermissionInfo { value: string; label: string; group: string }
 interface PermissionCatalog {
@@ -29,7 +42,7 @@ interface UserForm {
   password?: string;
 }
 
-const ROLE_LABELS: Record<string, string> = {
+const FALLBACK_ROLE_LABELS: Record<string, string> = {
   super_admin: "Супер-админ",
   admin: "Администратор",
   moderator: "Модератор",
@@ -45,8 +58,44 @@ const EMPTY: UserForm = {
 export default function UsersPage() {
   const { data, mutate } = useSWR<Page<User>>("/users?size=100", fetcher);
   const { data: catalog } = useSWR<PermissionCatalog>("/users/permissions", fetcher);
+  const { data: roleLabels, mutate: mutateLabels } =
+    useSWR<Record<string, string>>("/users/role-labels", fetcher);
+  const { data: roleColorsData, mutate: mutateColors } =
+    useSWR<Record<string, string>>("/users/role-colors", fetcher);
   const [form, setForm] = useState<UserForm | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Rename-roles dialog: labels + colors together.
+  const [renaming, setRenaming] = useState<Record<string, string> | null>(null);
+  const [renamingColors, setRenamingColors] = useState<Record<string, string>>({});
+  const [preview, setPreview] = useState<string | null>(null);
+  const toast = useToast();
+
+  const ROLE_COLORS = { ...DEFAULT_ROLE_COLORS, ...(roleColorsData ?? {}) };
+
+  useEffect(() => setPreview(getPreviewRole()), []);
+
+  const ROLE_LABELS = { ...FALLBACK_ROLE_LABELS, ...(roleLabels ?? {}) };
+
+  const saveNames = async () => {
+    if (!renaming) return;
+    try {
+      await Promise.all([
+        api("/users/role-labels", { method: "PUT", body: JSON.stringify(renaming) }),
+        api("/users/role-colors", { method: "PUT", body: JSON.stringify(renamingColors) }),
+      ]);
+      await Promise.all([mutateLabels(), mutateColors()]);
+      setRenaming(null);
+      toast.success("Роли обновлены");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  const applyPreview = (role: string | null) => {
+    setPreviewRole(role);
+    setPreview(role);
+    toast.info(role ? `Просмотр от лица: ${ROLE_LABELS[role] ?? role}` : "Просмотр от своей роли");
+  };
 
   const openNew = () => { setForm({ ...EMPTY }); setError(null); };
   const openEdit = (u: User) => {
@@ -105,7 +154,7 @@ export default function UsersPage() {
   };
 
   const remove = async (id: number) => {
-    if (!confirm("Удалить пользователя?")) return;
+    if (!(await confirm({ message: "Удалить пользователя?", danger: true }))) return;
     await api(`/users/${id}`, { method: "DELETE" });
     mutate();
   };
@@ -118,30 +167,53 @@ export default function UsersPage() {
 
   return (
     <div>
-      <PageHeader title="Пользователи" action={<button className="btn-primary" onClick={openNew}>Добавить</button>} />
+      <PageHeader
+        title="Пользователи"
+        action={
+          <div className="flex gap-2">
+            <button className="btn-outline" onClick={() => { setRenaming({ ...ROLE_LABELS }); setRenamingColors({ ...ROLE_COLORS }); }}>
+              <Tags className="h-4 w-4" /> Названия ролей
+            </button>
+            <button className="btn-primary" onClick={openNew}>Добавить</button>
+          </div>
+        }
+      />
+
+      <div className="card mb-4 flex flex-wrap items-center gap-3 p-4">
+        <Eye className="h-4 w-4 text-muted-foreground" />
+        <span className="text-sm font-medium">Просмотр сайта от лица роли</span>
+        <div className="w-56">
+          <Select value={preview ?? ""} onChange={(v) => applyPreview(v || null)}>
+            <option value="">Своя роль (без ограничений)</option>
+            {(catalog?.all_roles ?? ROLE_ORDER).map((r) => (
+              <option key={r} value={r}>{ROLE_LABELS[r] ?? r}</option>
+            ))}
+          </Select>
+        </div>
+        <span className="text-xs text-muted-foreground">
+          Интерфейс скрывает разделы, недоступные выбранной роли. Права на сервере не меняются.
+        </span>
+      </div>
 
       <div className="card overflow-hidden">
         <div className="table-wrap">
-        <table className="w-full text-sm">
-          <thead className="bg-muted text-left text-muted-foreground">
-            <tr>
-              <th className="px-4 py-3">Email</th>
-              <th className="px-4 py-3">Имя</th>
-              <th className="px-4 py-3">Роль</th>
-              <th className="px-4 py-3">Telegram</th>
-              <th className="px-4 py-3">Яндекс</th>
-              <th className="px-4 py-3">2FA</th>
-              <th className="px-4 py-3">Активен</th>
-              <th className="px-4 py-3 text-right">Действия</th>
-            </tr>
-          </thead>
-          <tbody>
+        <ResizableTable
+          id="users"
+          columns={["Email", "Имя", "Роль", "Telegram", "Яндекс", "2FA", "Активен", "Действия"]}
+        >
             {data?.items.map((u) => (
               <tr key={u.id} className="border-t border-border">
                 <td className="px-4 py-3 font-medium">{u.email}</td>
                 <td className="px-4 py-3">{u.full_name ?? "—"}</td>
                 <td className="px-4 py-3">
-                  <span className="badge bg-slate-50 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700">
+                  <span
+                    className="badge"
+                    style={{
+                      backgroundColor: `${ROLE_COLORS[u.role] ?? "#94a3b8"}22`,
+                      color: ROLE_COLORS[u.role] ?? "#94a3b8",
+                      borderColor: `${ROLE_COLORS[u.role] ?? "#94a3b8"}55`,
+                    }}
+                  >
                     {ROLE_LABELS[u.role] ?? u.role}
                   </span>
                 </td>
@@ -150,7 +222,14 @@ export default function UsersPage() {
                 <td className="px-4 py-3">{u.is_2fa_enabled ? "✓" : "—"}</td>
                 <td className="px-4 py-3">{u.is_active ? "Да" : "Нет"}</td>
                 <td className="px-4 py-3">
-                  <div className="flex justify-end gap-1.5">
+                  <div className="flex justify-center gap-1.5">
+                    <Link
+                      className="btn-icon"
+                      title="Открыть личный кабинет"
+                      href={`/profile?user_id=${u.id}`}
+                    >
+                      <UserCircle className="h-4 w-4" />
+                    </Link>
                     <button className="btn-icon" title="Редактировать" onClick={() => openEdit(u)}>
                       <Pencil className="h-4 w-4" />
                     </button>
@@ -161,8 +240,7 @@ export default function UsersPage() {
                 </td>
               </tr>
             ))}
-          </tbody>
-        </table>
+        </ResizableTable>
         </div>
       </div>
 
@@ -194,10 +272,10 @@ export default function UsersPage() {
                 <input className="input" value={form.yandex_id ?? ""} onChange={(e) => upd({ yandex_id: e.target.value })} />
               </Field>
               <Field label="Язык">
-                <select className="input" value={form.language} onChange={(e) => upd({ language: e.target.value })}>
+                <Select value={form.language} onChange={(v) => upd({ language: v })}>
                   <option value="ru">ru</option>
                   <option value="en">en</option>
-                </select>
+                </Select>
               </Field>
             </div>
             <Checkbox checked={form.is_active} onChange={(v) => upd({ is_active: v })} label="Активен" />
@@ -258,6 +336,54 @@ export default function UsersPage() {
 
             <div className="flex justify-end border-t border-border pt-4">
               <button className="btn-primary" onClick={save}>Сохранить</button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!renaming} onClose={() => setRenaming(null)} title="Роли: названия и цвета">
+        {renaming && (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Отображаемые названия и цвет бейджа роли. Набор прав у роли не меняется.
+            </p>
+            {(catalog?.all_roles ?? ROLE_ORDER).map((r) => (
+              <div key={r} className="flex items-end gap-3">
+                <div className="flex-1">
+                  <Field label={FALLBACK_ROLE_LABELS[r] ?? r} hint={r}>
+                    <input
+                      className="input"
+                      value={renaming[r] ?? ""}
+                      onChange={(e) => setRenaming({ ...renaming, [r]: e.target.value })}
+                    />
+                  </Field>
+                </div>
+                <div className="flex flex-col items-center gap-1 pb-0.5">
+                  <span className="text-xs text-muted-foreground">Цвет</span>
+                  <input
+                    type="color"
+                    className="h-9 w-11 cursor-pointer rounded border border-border bg-transparent p-0.5"
+                    value={renamingColors[r] ?? DEFAULT_ROLE_COLORS[r] ?? "#94a3b8"}
+                    onChange={(e) => setRenamingColors({ ...renamingColors, [r]: e.target.value })}
+                    title={`Цвет бейджа: ${FALLBACK_ROLE_LABELS[r] ?? r}`}
+                  />
+                </div>
+                <div className="pb-1.5">
+                  <span
+                    className="badge"
+                    style={{
+                      backgroundColor: `${renamingColors[r] ?? DEFAULT_ROLE_COLORS[r] ?? "#94a3b8"}22`,
+                      color: renamingColors[r] ?? DEFAULT_ROLE_COLORS[r] ?? "#94a3b8",
+                      borderColor: `${renamingColors[r] ?? DEFAULT_ROLE_COLORS[r] ?? "#94a3b8"}55`,
+                    }}
+                  >
+                    {renaming[r] || FALLBACK_ROLE_LABELS[r] || r}
+                  </span>
+                </div>
+              </div>
+            ))}
+            <div className="flex justify-end border-t border-border pt-4">
+              <button className="btn-primary" onClick={saveNames}>Сохранить</button>
             </div>
           </div>
         )}

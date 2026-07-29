@@ -1,6 +1,13 @@
 "use client";
 
-import type { ReactNode } from "react";
+import {
+  Children,
+  isValidElement,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Check, ChevronDown } from "lucide-react";
 
 /** Styled checkbox with a label. */
@@ -74,7 +81,11 @@ export function RadioGroup<T extends string>({
   );
 }
 
-/** Styled native select with a custom chevron. */
+/**
+ * Custom dropdown that keeps the native `<option>` children API, so existing
+ * call sites need no changes: the options are read out of the children and
+ * rendered as a themed listbox instead of the browser's own popup.
+ */
 export function Select({
   value,
   onChange,
@@ -88,17 +99,80 @@ export function Select({
   className?: string;
   disabled?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  const options: { value: string; label: ReactNode; disabled?: boolean }[] = [];
+  Children.forEach(children, (child) => {
+    if (!isValidElement(child)) return;
+    const props = child.props as { value?: string | number; children?: ReactNode; disabled?: boolean };
+    options.push({
+      value: String(props.value ?? ""),
+      label: props.children ?? String(props.value ?? ""),
+      disabled: props.disabled,
+    });
+  });
+
+  const current = options.find((o) => o.value === String(value));
+
+  // Close on outside click and on Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!boxRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
   return (
-    <div className={`relative ${className}`}>
-      <select
-        className="input appearance-none pr-9"
-        value={value}
+    <div ref={boxRef} className={`relative ${className}`}>
+      <button
+        type="button"
         disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
+        onClick={() => setOpen((v) => !v)}
+        className="input flex items-center justify-between gap-2 text-left disabled:cursor-not-allowed disabled:opacity-50"
+        aria-haspopup="listbox"
+        aria-expanded={open}
       >
-        {children}
-      </select>
-      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <span className="truncate">{current?.label ?? ""}</span>
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          className="absolute z-50 mt-1 max-h-60 w-full origin-top overflow-y-auto rounded-lg border border-border
+                     bg-card p-1 shadow-lg animate-in"
+        >
+          {options.map((o) => {
+            const active = o.value === String(value);
+            return (
+              <button
+                key={o.value}
+                type="button"
+                role="option"
+                aria-selected={active}
+                disabled={o.disabled}
+                onClick={() => { onChange(o.value); setOpen(false); }}
+                className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-sm
+                            transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                              active ? "bg-primary/10 font-medium text-primary" : "hover:bg-muted"
+                            }`}
+              >
+                <span className="truncate">{o.label}</span>
+                {active && <Check className="h-3.5 w-3.5 shrink-0" strokeWidth={3} />}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

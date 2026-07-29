@@ -45,14 +45,17 @@ _WORLD_MARKERS = (
 )
 
 
-def _looks_like_world_news(title: str | None, text: str) -> bool:
+def _looks_like_world_news(
+    title: str | None, text: str, markers: tuple[str, ...] = _WORLD_MARKERS
+) -> bool:
     """Heuristically decide whether an item is world/federal news.
 
     Used as an exception to the "must be regionally relevant" rule so that
     genuinely important non-local stories are not silently discarded.
+    ``markers`` may be extended with the keywords of the «другие» entry.
     """
     blob = f"{title or ''} {text[:600]}".lower()
-    return any(marker in blob for marker in _WORLD_MARKERS)
+    return any(marker in blob for marker in markers)
 
 
 @dataclass
@@ -76,6 +79,9 @@ class IngestionPipeline:
         #: Whether items matching no monitored city are kept as world news.
         #: Loaded per run in :meth:`process_source`.
         self._world_news_enabled = True
+        #: World markers in effect for the current run (built-ins + «другие»
+        #: keywords). Loaded per run in :meth:`process_source`.
+        self._world_markers: tuple[str, ...] = _WORLD_MARKERS
 
     async def _dedup_config(self) -> DedupConfig:
         cfg = await self.settings_service.get_many("dedup.")
@@ -121,6 +127,17 @@ class IngestionPipeline:
         self._world_news_enabled = bool(
             await self.settings_service.get("pipeline.keep_world_news", True)
         )
+        # Keywords of the «другие» entry extend the built-in world markers, so
+        # operators can tune what counts as world news without code changes.
+        bucket = await self._world_bucket()
+        extra_markers: tuple[str, ...] = ()
+        if bucket is not None:
+            extra_markers = tuple(
+                kw.lower()
+                for kw in ((bucket.keywords or []) + (bucket.extra_keywords or []))
+                if kw
+            )
+        self._world_markers = _WORLD_MARKERS + extra_markers
         dedup = DedupService(self.session, await self._dedup_config())
 
         # Real-time mode: only ingest genuinely fresh publications. Without this
@@ -168,8 +185,32 @@ class IngestionPipeline:
         return report
 
     async def _all_active_cities(self) -> list[City]:
-        result = await self.session.scalars(select(City).where(City.is_active.is_(True)))
+        """Active entries that can match news by keywords (real cities only)."""
+        result = await self.session.scalars(
+            select(City).where(City.is_active.is_(True), City.kind == "city")
+        )
         return list(result.all())
+
+    async def _world_bucket(self) -> City | None:
+        """The entry world / unmatched news belong to.
+
+        Prefers the explicitly flagged bucket, then any active «другие» entry.
+        Returns ``None`` when the operator has not created one — in that case
+        unmatched items are dropped instead of landing in a real city's topic.
+        """
+        bucket = await self.session.scalar(
+            select(City)
+            .where(City.is_active.is_(True), City.is_world_bucket.is_(True))
+            .limit(1)
+        )
+        if bucket is not None:
+            return bucket
+        return await self.session.scalar(
+            select(City)
+            .where(City.is_active.is_(True), City.kind == "other")
+            .order_by(City.id)
+            .limit(1)
+        )
 
     async def _process_item(
         self,
@@ -188,7 +229,7 @@ class IngestionPipeline:
 
         # World news are kept even without a city keyword match (they are of
         # general interest); everything else must be regionally relevant.
-        is_world = _looks_like_world_news(item.title, item.text)
+        is_world = _looks_like_world_news(item.title, item.text, self._world_markers)
 
         # If the source is explicitly bound to cities, its posts belong to those
         # cities directly — keyword matching only picks the best one, and we do
@@ -207,14 +248,14 @@ class IngestionPipeline:
                 report.unmatched += 1
                 return None
             is_world = True
-            # A city is still required to resolve channels/topic, so fall back to
-            # the first active one; the world topic overrides its moderation
-            # thread.
-            fallback = await self._all_active_cities()
-            if not fallback:
+            # World news belong to the dedicated «другие» entry (Мировые
+            # новости / Интернет), never to a real city — otherwise they would
+            # be moderated and published in that city's topic and channel.
+            bucket = await self._world_bucket()
+            if bucket is None:
                 report.unmatched += 1
                 return None
-            matched_city = fallback[0]
+            matched_city = bucket
             match_score = max(match_score, 0.0)
 
         # 2) Dedup

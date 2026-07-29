@@ -6,6 +6,8 @@ import { api, fetcher } from "@/lib/api";
 import type { Page } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal, Field } from "@/components/Modal";
+import { Checkbox, Select } from "@/components/Controls";
+import { confirm } from "@/components/ConfirmDialog";
 
 interface AIProfile {
   id: number;
@@ -87,7 +89,7 @@ export default function AIPage() {
   };
 
   const remove = async (id: number) => {
-    if (!confirm("Удалить профиль?")) return;
+    if (!(await confirm({ message: "Удалить профиль?", danger: true }))) return;
     await api(`/ai/${id}`, { method: "DELETE" });
     mutate();
   };
@@ -175,16 +177,16 @@ export default function AIPage() {
         <div className="card space-y-3 p-5">
           <h3 className="font-medium">Тест обработки</h3>
           <div className="grid grid-cols-2 gap-2">
-            <select className="input" value={testProfile} onChange={(e) => setTestProfile(e.target.value ? Number(e.target.value) : "")}>
+            <Select value={String(testProfile)} onChange={(v) => setTestProfile(v ? Number(v) : "")}>
               <option value="">Профиль по умолчанию</option>
               {data?.items.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            <select className="input" value={testTemplate} onChange={(e) => setTestTemplate(e.target.value ? Number(e.target.value) : "")}>
+            </Select>
+            <Select value={String(testTemplate)} onChange={(v) => setTestTemplate(v ? Number(v) : "")}>
               <option value="">Без шаблона</option>
               {templates?.items.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
+            </Select>
           </div>
-          <textarea className="input min-h-[120px]" value={text} onChange={(e) => setText(e.target.value)} />
+          <textarea className="input min-h-[220px]" value={text} onChange={(e) => setText(e.target.value)} />
           <button className="btn-primary" disabled={testing} onClick={test}>
             {testing ? "Обработка…" : "Запустить тест"}
           </button>
@@ -216,11 +218,11 @@ export default function AIPage() {
             <div className="grid grid-cols-2 gap-4">
               <Field label="Название"><input className="input" value={form.name ?? ""} onChange={(e) => upd({ name: e.target.value })} /></Field>
               <Field label="Провайдер">
-                <select className="input" value={form.provider} onChange={(e) => upd({ provider: e.target.value })}>
+                <Select value={form.provider ?? "anthropic"} onChange={(v) => upd({ provider: v })}>
                   {(providers ?? ["anthropic", "openai", "gemini", "local"]).map((p) => (
                     <option key={p} value={p}>{PROVIDER_LABELS[p] ?? p}</option>
                   ))}
-                </select>
+                </Select>
               </Field>
             </div>
             <Field label="API-ключ" hint={form.id ? (form.has_api_key ? "Ключ уже задан. Оставьте пустым, чтобы не менять." : "Ключ ещё не задан.") : `Получить: ${hint?.keyUrl ?? ""}`}>
@@ -235,7 +237,7 @@ export default function AIPage() {
               </Field>
             </div>
             <Field label="Системный промпт" hint="Основная инструкция модели">
-              <textarea className="input min-h-[120px]" value={form.system_prompt ?? ""} onChange={(e) => upd({ system_prompt: e.target.value })} />
+              <textarea className="input min-h-[240px]" value={form.system_prompt ?? ""} onChange={(e) => upd({ system_prompt: e.target.value })} />
             </Field>
             <Field label="Доп. инструкции" hint="Дополнения к промпту (опционально)">
               <textarea className="input" value={form.instructions ?? ""} onChange={(e) => upd({ instructions: e.target.value })} />
@@ -256,18 +258,26 @@ export default function AIPage() {
               </Field>
             </div>
             <div className="flex flex-wrap gap-6">
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={!!form.generate_embeddings} onChange={(e) => upd({ generate_embeddings: e.target.checked })} /> Эмбеддинги (семантич. дедуп)
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={form.auto_emoji ?? true} onChange={(e) => upd({ auto_emoji: e.target.checked })} /> Подбирать эмодзи к заголовку
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={!!form.is_default} onChange={(e) => upd({ is_default: e.target.checked })} /> По умолчанию
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={form.is_active ?? true} onChange={(e) => upd({ is_active: e.target.checked })} /> Активен
-              </label>
+              <Checkbox
+                checked={!!form.generate_embeddings}
+                onChange={(v) => upd({ generate_embeddings: v })}
+                label="Эмбеддинги (семантич. дедуп)"
+              />
+              <Checkbox
+                checked={form.auto_emoji ?? true}
+                onChange={(v) => upd({ auto_emoji: v })}
+                label="Подбирать эмодзи к заголовку"
+              />
+              <Checkbox
+                checked={!!form.is_default}
+                onChange={(v) => upd({ is_default: v })}
+                label="По умолчанию"
+              />
+              <Checkbox
+                checked={form.is_active ?? true}
+                onChange={(v) => upd({ is_active: v })}
+                label="Активен"
+              />
             </div>
             <div className="flex justify-end border-t border-border pt-4">
               <button className="btn-primary" onClick={save}>Сохранить</button>

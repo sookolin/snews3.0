@@ -7,6 +7,8 @@ import type { Page } from "@/lib/types";
 import { Pencil, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal, Field } from "@/components/Modal";
+import { Checkbox, Select } from "@/components/Controls";
+import { confirm } from "@/components/ConfirmDialog";
 
 interface Watermark {
   id: number;
@@ -73,7 +75,7 @@ export default function WatermarksPage() {
   };
 
   const remove = async (id: number) => {
-    if (!confirm("Удалить водяной знак?")) return;
+    if (!(await confirm({ message: "Удалить водяной знак?", danger: true }))) return;
     await api(`/watermarks/${id}`, { method: "DELETE" });
     mutate();
   };
@@ -124,9 +126,9 @@ export default function WatermarksPage() {
             <div className="grid grid-cols-2 gap-4">
               <Field label="Название"><input className="input" value={form.name ?? ""} onChange={(e) => upd({ name: e.target.value })} /></Field>
               <Field label="Позиция">
-                <select className="input" value={form.position} onChange={(e) => upd({ position: e.target.value })}>
+                <Select value={form.position ?? "bottom_right"} onChange={(v) => upd({ position: v })}>
                   {POSITIONS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-                </select>
+                </Select>
               </Field>
             </div>
             <Field label="Текст" hint="Если задан логотип — используется логотип">
@@ -157,15 +159,17 @@ export default function WatermarksPage() {
               </Field>
             </div>
             <div className="flex gap-6">
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={!!form.shadow} onChange={(e) => upd({ shadow: e.target.checked })} /> Тень
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={!!form.is_default} onChange={(e) => upd({ is_default: e.target.checked })} /> По умолчанию
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={form.is_active ?? true} onChange={(e) => upd({ is_active: e.target.checked })} /> Активен
-              </label>
+              <Checkbox checked={!!form.shadow} onChange={(v) => upd({ shadow: v })} label="Тень" />
+              <Checkbox
+                checked={!!form.is_default}
+                onChange={(v) => upd({ is_default: v })}
+                label="По умолчанию"
+              />
+              <Checkbox
+                checked={form.is_active ?? true}
+                onChange={(v) => upd({ is_active: v })}
+                label="Активен"
+              />
             </div>
             <div className="flex justify-end border-t border-border pt-4">
               <button className="btn-primary" onClick={save}>Сохранить</button>

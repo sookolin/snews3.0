@@ -2,6 +2,7 @@
 
 import { Plus, Trash2 } from "lucide-react";
 import type { PreviewButton } from "./TelegramPreview";
+import { Select } from "./Controls";
 
 interface Props {
   value: PreviewButton[][];
@@ -58,15 +59,16 @@ export function ButtonsEditor({ value, onChange }: Props) {
                   value={cell.url}
                   onChange={(e) => setCell(ri, ci, { url: e.target.value })}
                 />
-                <select
-                  className="input w-32"
-                  value={cell.color ?? ""}
-                  onChange={(e) => setCell(ri, ci, { color: e.target.value })}
-                >
-                  {COLORS.map((c) => (
-                    <option key={c.value} value={c.value}>{c.label}</option>
-                  ))}
-                </select>
+                <div className="w-32">
+                  <Select
+                    value={cell.color ?? ""}
+                    onChange={(v) => setCell(ri, ci, { color: v })}
+                  >
+                    {COLORS.map((c) => (
+                      <option key={c.value} value={c.value}>{c.label}</option>
+                    ))}
+                  </Select>
+                </div>
                 <button type="button" className="btn-outline px-2" onClick={() => removeCell(ri, ci)}>
                   <Trash2 className="h-4 w-4" />
                 </button>

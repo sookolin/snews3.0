@@ -173,7 +173,7 @@ async def update_news(
         await service.update_card(
             news,
             status_line=f"✏️ Изменено · {who}",
-            keep_buttons=news.status == NewsStatus.PENDING,
+            keep_buttons=True,
         )
     await session.refresh(news)
     return NewsOut.model_validate(news)
@@ -245,7 +245,7 @@ async def approve_news(
     who = actor.full_name or actor.email
     queued = "" if slot in ("immediate", "—") else f" · в очереди на {slot}"
     await NewsModerationService(session).update_card(
-        news, status_line=f"✅ Одобрено · {who}{queued}", keep_buttons=False
+        news, status_line=f"✅ Одобрено · {who}{queued}", keep_buttons=True
     )
     await session.refresh(news)
     return NewsOut.model_validate(news)
@@ -278,7 +278,7 @@ async def reject_news(
 
     who = actor.full_name or actor.email
     await NewsModerationService(session).update_card(
-        news, status_line=f"❌ Отклонено · {who}", keep_buttons=False
+        news, status_line=f"❌ Отклонено · {who}", keep_buttons=True
     )
     await session.refresh(news)
     return NewsOut.model_validate(news)

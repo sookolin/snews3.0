@@ -1,4 +1,4 @@
-"""Template rendering service.
+﻿"""Template rendering service.
 
 Renders a :class:`~shared.models.template.Template` into the final publication
 text. Supports HTML, Markdown and Telegram-HTML formats and safe placeholder
@@ -50,18 +50,7 @@ class TemplateRenderer:
         if getattr(template, "uppercase_title", False) and title:
             title = title.upper()
 
-        # Premium custom emoji as a Telegram <tg-emoji> tag.
-        #
-        # Telegram requires the tag to wrap a real emoji character: clients that
-        # cannot show the premium emoji display that character instead. The
-        # custom emoji is independent of {emoji} (the per-post accent), so a
-        # neutral placeholder is used and Telegram substitutes the premium art.
         custom_emoji = ""
-        if template.custom_emoji_id:
-            custom_emoji = (
-                f'<tg-emoji emoji-id="{template.custom_emoji_id}">👉</tg-emoji>'
-            )
-
         # {source} becomes a hyperlink to the original publication when a URL is
         # known, so the link lives inside the post itself.
         source_rendered = self._prepare(source, template.format)
@@ -82,6 +71,14 @@ class TemplateRenderer:
             link=link,
             footer="",
         )
+        # show_author / show_source toggles stored in custom variables.
+        # If the template sets show_author=0 or show_source=0, suppress the value.
+        _vars_raw = template.variables or {}
+        if str(_vars_raw.get("show_author", "1")) == "0":
+            author = ""
+        if str(_vars_raw.get("show_source", "1")) == "0":
+            source = ""
+            source_url = ""
         # Merge custom template variables (already assumed safe / author-provided).
         for key, value in (template.variables or {}).items():
             variables.setdefault(key, str(value))

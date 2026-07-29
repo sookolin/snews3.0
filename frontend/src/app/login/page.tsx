@@ -203,7 +203,7 @@ export default function LoginPage() {
         {/* Telegram Login Widget renders its own button here as a fallback. */}
         <div id="tg-login-widget" className="flex justify-center" />
         <p className="text-center text-[11px] text-muted-foreground">
-          Аккаунт должен быть привязан администратором (Telegram ID / Яндекс ID).
+          Аккаунт должен быть привязан администратором (Telegram ID / Яндекс ID / VK ID).
         </p>
       </form>
     </div>

@@ -34,6 +34,10 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "telegram.world_topic_id": {"value": 0, "category": "telegram"},
     # Display timezone offset (hours) for moderator-facing timestamps.
     "ui.timezone_offset_hours": {"value": 3, "category": "ui"},
+    # Layout of the moderation card in the topic. Empty = built-in layout.
+    # Placeholders: {post} {title} {id} {place} {city} {score} {source}
+    # {source_time} {processed_at} {moderator} {reply_to} {status} {url}
+    "moderation.card_template": {"value": "", "category": "telegram"},
     # Email notifications.
     "notifications.email_to": {"value": "", "category": "notifications"},
     "notifications.smtp_host": {"value": "", "category": "notifications"},

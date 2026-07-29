@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from backend.app.deps import ClientMeta, DBSession, require_permission
+from backend.app.deps import ClientMeta, CurrentUser, DBSession, require_permission
 from shared.enums import Permission
 from shared.models.user import User
 from shared.schemas.common import Message, Page, PaginationParams
@@ -58,6 +58,73 @@ async def list_permissions(
         for role, perms in ROLE_PERMISSIONS.items()
     }
     return {"permissions": catalog, "roles": roles, "all_roles": [r.value for r in UserRole]}
+
+
+#: Built-in role names, used when no custom label was set.
+DEFAULT_ROLE_LABELS: dict[str, str] = {
+    "super_admin": "Супер-админ",
+    "admin": "Администратор",
+    "moderator": "Модератор",
+    "editor": "Редактор",
+    "reviewer": "Наблюдатель",
+}
+
+
+@router.get("/role-labels", response_model=dict)
+async def get_role_labels(session: DBSession, _: CurrentUser) -> dict:
+    """Display names of the roles (renamed ones override the defaults).
+
+    Available to any authenticated user because every page renders role tags.
+    """
+    from shared.services.settings_service import SettingsService
+
+    custom = await SettingsService(session).get("roles.labels", {}) or {}
+    return {**DEFAULT_ROLE_LABELS, **{k: v for k, v in custom.items() if v}}
+
+
+@router.put("/role-labels", response_model=dict)
+async def set_role_labels(
+    payload: dict,
+    session: DBSession,
+    _: User = Depends(require_permission(Permission.USER_MANAGE)),
+) -> dict:
+    """Rename roles. Keys are role values, values are the new display names."""
+    from shared.services.settings_service import SettingsService
+
+    labels = {
+        key: str(value).strip()
+        for key, value in (payload or {}).items()
+        if key in DEFAULT_ROLE_LABELS and str(value or "").strip()
+    }
+    await SettingsService(session).set("roles.labels", labels, category="ui")
+    return {**DEFAULT_ROLE_LABELS, **labels}
+
+
+@router.get("/role-colors", response_model=dict)
+async def get_role_colors(session: DBSession, _: CurrentUser) -> dict:
+    """Role colors (hex codes). Available to all authenticated users."""
+    from shared.services.settings_service import SettingsService
+
+    colors = await SettingsService(session).get("roles.colors", {}) or {}
+    return {k: v for k, v in colors.items() if v}
+
+
+@router.put("/role-colors", response_model=dict)
+async def set_role_colors(
+    payload: dict,
+    session: DBSession,
+    _: User = Depends(require_permission(Permission.USER_MANAGE)),
+) -> dict:
+    """Set role colors. Keys are role values, values are hex color codes."""
+    from shared.services.settings_service import SettingsService
+
+    colors = {
+        key: str(value).strip()
+        for key, value in (payload or {}).items()
+        if key in DEFAULT_ROLE_LABELS and str(value or "").strip()
+    }
+    await SettingsService(session).set("roles.colors", colors, category="ui")
+    return colors
 
 
 @router.get("", response_model=Page[UserOut])

@@ -9,6 +9,9 @@ import { PageHeader } from "@/components/PageHeader";
 import { Modal, Field } from "@/components/Modal";
 import { Checkbox, Select } from "@/components/Controls";
 import { Pagination } from "@/components/Pagination";
+import { ResizableTable } from "@/components/ResizableTable";
+import { useToast } from "@/components/Toast";
+import { confirm } from "@/components/ConfirmDialog";
 
 const TYPES = ["rss", "telegram", "website", "html", "api"];
 const ENGINES = ["auto", "beautifulsoup", "lxml", "playwright"];
@@ -20,6 +23,7 @@ export default function SourcesPage() {
   const [form, setForm] = useState<Partial<Source> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const toast = useToast();
 
   const openNew = () =>
     setForm({
@@ -37,20 +41,31 @@ export default function SourcesPage() {
       else await api("/sources", { method: "POST", body: JSON.stringify(form) });
       setForm(null);
       mutate();
+      toast.success(form.id ? "Источник обновлён" : "Источник добавлен");
     } catch (e) {
       setError((e as Error).message);
+      toast.error((e as Error).message);
     }
   };
 
   const remove = async (id: number) => {
-    if (!confirm("Удалить источник?")) return;
-    await api(`/sources/${id}`, { method: "DELETE" });
-    mutate();
+    if (!(await confirm({ message: "Удалить источник?", danger: true }))) return;
+    try {
+      await api(`/sources/${id}`, { method: "DELETE" });
+      mutate();
+      toast.success("Источник удалён");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   };
 
   const check = async (id: number) => {
-    await api(`/sources/${id}/check`, { method: "POST" });
-    alert("Проверка источника поставлена в очередь");
+    try {
+      await api(`/sources/${id}/check`, { method: "POST" });
+      toast.info("Проверка источника поставлена в очередь");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   };
 
   return (
@@ -195,21 +210,21 @@ export default function SourcesPage() {
             </div>
             <Field label="Заголовки (JSON)" hint="HTTP-заголовки, например User-Agent">
               <textarea
-                className="input min-h-[70px] font-mono text-xs"
+                className="input input-compact font-mono text-xs"
                 value={JSON.stringify(form.headers ?? {}, null, 2)}
                 onChange={(e) => { try { upd({ headers: JSON.parse(e.target.value) }); } catch { /* ignore */ } }}
               />
             </Field>
             <Field label="Cookies (JSON)" hint="Для источников, где нужна авторизация">
               <textarea
-                className="input min-h-[60px] font-mono text-xs"
+                className="input input-compact font-mono text-xs"
                 value={JSON.stringify(form.cookies ?? {}, null, 2)}
                 onChange={(e) => { try { upd({ cookies: JSON.parse(e.target.value) }); } catch { /* ignore */ } }}
               />
             </Field>
             <Field label="Auth (JSON)" hint='{"type":"basic","username":"u","password":"p"} или {"type":"bearer","token":"..."}'>
               <textarea
-                className="input min-h-[60px] font-mono text-xs"
+                className="input input-compact font-mono text-xs"
                 value={JSON.stringify(form.auth ?? {}, null, 2)}
                 onChange={(e) => { try { upd({ auth: JSON.parse(e.target.value) }); } catch { /* ignore */ } }}
               />
@@ -219,7 +234,7 @@ export default function SourcesPage() {
               hint='website и html: {"item":".card","title":"h2","text":".sum","link":"a@href"}. API: {"root":"data","title":"title","text":"body"}'
             >
               <textarea
-                className="input min-h-[80px] font-mono text-xs"
+                className="input input-compact font-mono text-xs"
                 value={JSON.stringify(form.selectors ?? {}, null, 2)}
                 onChange={(e) => { try { upd({ selectors: JSON.parse(e.target.value) }); } catch { /* ignore */ } }}
               />
@@ -236,19 +251,23 @@ export default function SourcesPage() {
         )}
       </Modal>
 
+      {data && (
+        <Pagination
+          page={page}
+          size={size}
+          total={data.total}
+          onPage={setPage}
+          onSize={setSize}
+          position="top"
+        />
+      )}
+
       <div className="card overflow-hidden">
         <div className="table-wrap">
-          <table className="w-full text-sm">
-            <thead className="bg-muted text-left text-muted-foreground">
-              <tr>
-                <th className="px-4 py-3">Название</th>
-                <th className="px-4 py-3">Тип</th>
-                <th className="px-4 py-3">Интервал</th>
-                <th className="px-4 py-3">Ошибки</th>
-                <th className="px-4 py-3 text-right">Действия</th>
-              </tr>
-            </thead>
-            <tbody>
+          <ResizableTable
+            id="sources"
+            columns={["Название", "Тип", "Интервал", "Ошибки", "Действия"]}
+          >
               {data?.items.map((s) => (
                 <tr key={s.id} className="border-t border-border">
                   <td className="px-4 py-3">
@@ -265,7 +284,7 @@ export default function SourcesPage() {
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex justify-end gap-1.5">
+                    <div className="flex justify-center gap-1.5">
                       <button className="btn-icon" title="Редактировать" onClick={() => openEdit(s)}>
                         <Pencil className="h-4 w-4" />
                       </button>
@@ -286,8 +305,7 @@ export default function SourcesPage() {
                   </td>
                 </tr>
               )}
-            </tbody>
-          </table>
+          </ResizableTable>
         </div>
       </div>
 

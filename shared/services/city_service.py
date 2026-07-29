@@ -62,10 +62,25 @@ class CityService:
             language=payload.language,
             is_active=payload.is_active,
             template_id=payload.template_id,
+            kind=payload.kind,
+            is_world_bucket=payload.is_world_bucket,
         )
         self.session.add(city)
         await self.session.flush()
+        if city.is_world_bucket:
+            await self._make_sole_world_bucket(city)
         return city
+
+    async def _make_sole_world_bucket(self, city: City) -> None:
+        """Ensure only one entry collects world/unmatched news."""
+        others = (
+            await self.session.scalars(
+                select(City).where(City.is_world_bucket.is_(True), City.id != city.id)
+            )
+        ).all()
+        for other in others:
+            other.is_world_bucket = False
+        await self.session.flush()
 
     async def update(self, city_id: int, payload: CityUpdate) -> City:
         city = await self.get_or_404(city_id)
@@ -74,7 +89,12 @@ class CityService:
             city.slug = await self._unique_slug(data["name"])
         for key, value in data.items():
             setattr(city, key, value)
+        # A "city" entry can never be the world bucket.
+        if city.kind != "other":
+            city.is_world_bucket = False
         await self.session.flush()
+        if city.is_world_bucket:
+            await self._make_sole_world_bucket(city)
         return city
 
     async def delete(self, city_id: int) -> None:

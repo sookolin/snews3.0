@@ -4,6 +4,7 @@ import useSWR from "swr";
 import { fetcher } from "@/lib/api";
 import type { Page } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
+import { ResizableTable } from "@/components/ResizableTable";
 
 interface AuditLog {
   id: number;
@@ -23,17 +24,7 @@ export default function LogsPage() {
       <PageHeader title="Логи" />
       <div className="card overflow-hidden">
         <div className="table-wrap">
-        <table className="w-full text-sm">
-          <thead className="bg-muted text-left text-muted-foreground">
-            <tr>
-              <th className="px-4 py-3">Время</th>
-              <th className="px-4 py-3">Действие</th>
-              <th className="px-4 py-3">Кто</th>
-              <th className="px-4 py-3">Объект</th>
-              <th className="px-4 py-3">IP</th>
-            </tr>
-          </thead>
-          <tbody>
+        <ResizableTable id="logs" columns={["Время", "Действие", "Кто", "Объект", "IP"]}>
             {data?.items.map((l) => (
               <tr key={l.id} className="border-t border-border">
                 <td className="px-4 py-3 text-muted-foreground">{new Date(l.created_at).toLocaleString("ru-RU")}</td>
@@ -43,8 +34,10 @@ export default function LogsPage() {
                 <td className="px-4 py-3 text-muted-foreground">{l.ip_address ?? "—"}</td>
               </tr>
             ))}
-          </tbody>
-        </table>
+            {data && data.items.length === 0 && (
+              <tr><td colSpan={5} className="px-4 py-6 text-center text-muted-foreground">Записей нет</td></tr>
+            )}
+        </ResizableTable>
         </div>
       </div>
     </div>

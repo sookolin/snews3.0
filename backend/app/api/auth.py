@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from backend.app.deps import CurrentUser, DBSession, rate_limiter
@@ -31,8 +31,22 @@ from shared.services.user_service import UserService
 router = APIRouter()
 
 
+async def _after_login(session, user, request: Request | None = None) -> None:
+    """Stamp the login time and DM the user if they asked to be told."""
+    import contextlib
+
+    user.last_login_at = datetime.now(timezone.utc)
+    await session.flush()
+    # A dead bot token or a blocked chat must never break signing in.
+    with contextlib.suppress(Exception):
+        from shared.services.bot_notify import BotNotifyService
+
+        ip = request.client.host if request is not None and request.client else None
+        await BotNotifyService(session).notify_login(user, ip=ip)
+
+
 @router.post("/login", response_model=TokenPair, dependencies=[Depends(rate_limiter)])
-async def login(payload: LoginRequest, session: DBSession) -> TokenPair:
+async def login(payload: LoginRequest, session: DBSession, request: Request) -> TokenPair:
     """Authenticate a user and return an access/refresh token pair."""
     service = UserService(session)
     user = await service.get_by_email(payload.email)
@@ -47,9 +61,7 @@ async def login(payload: LoginRequest, session: DBSession) -> TokenPair:
         if not user.totp_secret or not verify_totp(user.totp_secret, payload.totp_code):
             raise AuthenticationError("Invalid 2FA code", code="2fa_invalid")
 
-    user.last_login_at = datetime.now(timezone.utc)
-    await session.flush()
-
+    await _after_login(session, user, request)
     return TokenPair(
         access_token=create_access_token(user.id, {"role": user.role.value}),
         refresh_token=create_refresh_token(user.id),
@@ -123,8 +135,7 @@ async def login_telegram(payload: TelegramLoginRequest, session: DBSession) -> T
             "Этот Telegram-аккаунт не привязан к пользователю", code="telegram_not_linked"
         )
 
-    user.last_login_at = datetime.now(timezone.utc)
-    await session.flush()
+    await _after_login(session, user)
     return TokenPair(
         access_token=create_access_token(user.id, {"role": user.role.value}),
         refresh_token=create_refresh_token(user.id),
@@ -177,8 +188,8 @@ async def login_yandex(payload: YandexLoginRequest, session: DBSession) -> Token
             "Этот Яндекс-аккаунт не привязан к пользователю", code="yandex_not_linked"
         )
 
-    user.last_login_at = datetime.now(timezone.utc)
-    await session.flush()
+    user.last_login_at = datetime.now(timezone.utc)  # keep for flush ordering
+    await _after_login(session, user)
     return TokenPair(
         access_token=create_access_token(user.id, {"role": user.role.value}),
         refresh_token=create_refresh_token(user.id),
@@ -234,8 +245,7 @@ async def login_vk(payload: VKLoginRequest, session: DBSession) -> TokenPair:
             "Этот VK-аккаунт не привязан к пользователю", code="vk_not_linked"
         )
 
-    user.last_login_at = datetime.now(timezone.utc)
-    await session.flush()
+    await _after_login(session, user)
     return TokenPair(
         access_token=create_access_token(user.id, {"role": user.role.value}),
         refresh_token=create_refresh_token(user.id),

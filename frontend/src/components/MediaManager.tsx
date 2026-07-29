@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Upload, Link2, Trash2, EyeOff, Eye } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Upload, Link2, Trash2, EyeOff, Eye, LayoutGrid, GalleryHorizontal } from "lucide-react";
 import { api, getToken } from "@/lib/api";
 
 export interface MediaAsset {
@@ -27,11 +27,25 @@ interface Props {
   onChange: () => void;
 }
 
+const VIEW_KEY = "media-manager-view";
+
 /** Manage news media: upload from device, add by URL, per-asset spoiler/toggle. */
 export function MediaManager({ newsId, media, onChange }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
+  // Display mode is remembered across news items and reloads.
+  const [view, setView] = useState<"grid" | "carousel">("grid");
+
+  useEffect(() => {
+    const saved = localStorage.getItem(VIEW_KEY);
+    if (saved === "grid" || saved === "carousel") setView(saved);
+  }, []);
+
+  const setViewMode = (v: "grid" | "carousel") => {
+    setView(v);
+    localStorage.setItem(VIEW_KEY, v);
+  };
 
   const uploadFiles = async (files: FileList | null) => {
     if (!files || !files.length) return;
@@ -98,14 +112,43 @@ export function MediaManager({ newsId, media, onChange }: Props) {
             <Link2 className="h-4 w-4" /> Добавить
           </button>
         </div>
+        {media.length > 0 && (
+          <div className="flex overflow-hidden rounded-md border border-border">
+            <button
+              type="button"
+              title="Карточки"
+              className={`px-2 py-1 transition-colors ${view === "grid" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+              onClick={() => setViewMode("grid")}
+            >
+              <LayoutGrid className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              title="Карусель"
+              className={`px-2 py-1 transition-colors ${view === "carousel" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+              onClick={() => setViewMode("carousel")}
+            >
+              <GalleryHorizontal className="h-4 w-4" />
+            </button>
+          </div>
+        )}
       </div>
 
       {media.length > 0 && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <div
+          className={
+            view === "carousel"
+              ? "flex snap-x snap-mandatory gap-2 overflow-x-auto pb-2"
+              : "grid grid-cols-3 gap-2 sm:grid-cols-4"
+          }
+        >
           {media.map((m) => {
             const src = mediaUrl(m);
             return (
-              <div key={m.id} className={`rounded-md border p-2 ${m.is_enabled ? "border-border" : "border-dashed opacity-50"}`}>
+              <div
+                key={m.id}
+                className={`rounded-md border p-1.5 ${view === "carousel" ? "w-[150px] shrink-0 snap-start" : ""} ${m.is_enabled ? "border-border" : "border-dashed opacity-50"}`}
+              >
                 <div className="relative mb-1 aspect-video overflow-hidden rounded bg-muted">
                   {src && (m.type === "video" ? (
                     <video src={src} className="h-full w-full object-cover" controls />

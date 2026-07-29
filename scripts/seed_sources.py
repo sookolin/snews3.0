@@ -1,12 +1,13 @@
-"""Seed a set of popular Russian news sources.
+"""Seed the working set of Krasnodar news sources.
 
-Adds well-known RSS feeds (federal + Krasnodar region) so the admin panel has
+Adds the RSS feeds plus the test Telegram channel so the admin panel has
 working sources out of the box. Idempotent: sources are matched by URL.
 
 Usage::
 
-    python -m scripts.seed_sources                # federal + all regional
-    python -m scripts.seed_sources --city 5       # bind regional feeds to city 5
+    python -m scripts.seed_sources                # add the seed list
+    python -m scripts.seed_sources --city 5       # bind feeds to city 5
+    python -m scripts.seed_sources --replace      # drop everything not listed here
 """
 
 from __future__ import annotations
@@ -24,32 +25,31 @@ from shared.models.source import Source, source_cities
 
 log = get_logger("seed_sources")
 
-#: Federal feeds — matched to cities by keywords (no explicit city binding).
-FEDERAL: list[dict] = [
-    {"name": "Lenta.ru", "url": "https://lenta.ru/rss/news", "interval": 300},
-    {"name": "RIA Новости", "url": "https://ria.ru/export/rss2/archive/index.xml", "interval": 300},
-    {"name": "Интерфакс", "url": "https://www.interfax.ru/rss.asp", "interval": 300},
-    {"name": "ТАСС", "url": "https://tass.ru/rss/v2.xml", "interval": 300},
-    {"name": "Коммерсантъ", "url": "https://www.kommersant.ru/RSS/news.xml", "interval": 300},
-    {"name": "РБК", "url": "https://rssexport.rbc.ru/rbcnews/news/30/full.rss", "interval": 300},
-    {"name": "Газета.Ru", "url": "https://www.gazeta.ru/export/rss/lenta.xml", "interval": 300},
-    {"name": "Известия", "url": "https://iz.ru/xml/rss/all.xml", "interval": 300},
-    {"name": "Российская газета", "url": "https://rg.ru/xml/index.xml", "interval": 300},
-    {"name": "Ведомости", "url": "https://www.vedomosti.ru/rss/news", "interval": 300},
-]
+#: No federal feeds are seeded any more — the list below is the whole set.
+FEDERAL: list[dict] = []
 
 #: Krasnodar-region feeds — bound to the city when --city is given.
 KRASNODAR: list[dict] = [
-    {"name": "Юга.ру", "url": "https://www.yuga.ru/rss/", "interval": 240},
-    {"name": "Кубанские новости", "url": "https://kubnews.ru/rss/", "interval": 240},
-    {"name": "Живая Кубань", "url": "https://livekuban.ru/rss.xml", "interval": 240},
-    {"name": "Краснодарские известия", "url": "https://ki-news.ru/feed/", "interval": 240},
+    {"name": "93.ru Краснодар", "url": "https://93.ru/text/rss.xml", "interval": 240},
+    {"name": "РБК Краснодар", "url": "https://kuban.rbc.ru/kuban/rss/", "interval": 240},
     {
         "name": "Блокнот Краснодар",
         "url": "https://bloknot-krasnodar.ru/rss_yandex.php",
         "interval": 240,
     },
-    {"name": "93.ru Краснодар", "url": "https://93.ru/text/rss.xml", "interval": 240},
+    {"name": "КП Кубань", "url": "https://www.kuban.kp.ru/rss/allsections.xml", "interval": 240},
+    {"name": "КраснодарМедиа", "url": "https://krasnodarmedia.su/rss/", "interval": 240},
+    {"name": "Югополис", "url": "https://www.yugopolis.ru/rss/", "interval": 240},
+]
+
+#: Telegram channels parsed through the telegram parser plugin.
+TELEGRAM: list[dict] = [
+    {
+        "name": "SNews тест",
+        "url": "https://t.me/snewstest123",
+        "interval": 180,
+        "type": SourceType.TELEGRAM,
+    },
 ]
 
 
@@ -62,7 +62,7 @@ async def _upsert(session, spec: dict, city_ids: list[int]) -> bool:  # type: ig
     source = Source(
         name=spec["name"],
         url=spec["url"],
-        type=SourceType.RSS,
+        type=spec.get("type", SourceType.RSS),
         parser_engine=ParserEngine.AUTO,
         check_interval_seconds=spec.get("interval", 300),
         timeout_seconds=30,
@@ -88,7 +88,7 @@ async def _upsert(session, spec: dict, city_ids: list[int]) -> bool:  # type: ig
     return True
 
 
-async def seed_sources(city_id: int | None = None) -> None:
+async def seed_sources(city_id: int | None = None, replace: bool = False) -> None:
     configure_logging()
     async with session_scope() as session:
         # Resolve the target city for regional feeds.
@@ -101,17 +101,27 @@ async def seed_sources(city_id: int | None = None) -> None:
                 regional_cities = [city.id]
                 log.info("binding_regional_feeds", city=city.name)
 
+        removed = 0
+        if replace:
+            keep = {s["url"] for s in FEDERAL + KRASNODAR + TELEGRAM}
+            stale = (await session.scalars(select(Source).where(Source.url.not_in(keep)))).all()
+            for source in stale:
+                await session.delete(source)
+                removed += 1
+            await session.flush()
+            log.info("stale_sources_removed", count=removed)
+
         created = 0
         for spec in FEDERAL:
             if await _upsert(session, spec, []):
                 created += 1
-        for spec in KRASNODAR:
+        for spec in KRASNODAR + TELEGRAM:
             if await _upsert(session, spec, regional_cities):
                 created += 1
 
         await session.commit()
-        log.info("seed_sources_done", created=created)
-        print(f"Создано источников: {created}")
+        log.info("seed_sources_done", created=created, removed=removed)
+        print(f"Создано источников: {created}, удалено прежних: {removed}")
 
 
 def main() -> None:
@@ -120,8 +130,12 @@ def main() -> None:
         "--city", type=int, default=None,
         help="City id to bind regional (Krasnodar) feeds to",
     )
+    parser.add_argument(
+        "--replace", action="store_true",
+        help="Delete every source that is not in this seed list",
+    )
     args = parser.parse_args()
-    asyncio.run(seed_sources(args.city))
+    asyncio.run(seed_sources(args.city, args.replace))
 
 
 if __name__ == "__main__":

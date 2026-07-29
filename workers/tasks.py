@@ -81,10 +81,21 @@ async def _notify_moderation(session, news_id: int) -> None:  # type: ignore[no-
         source_name=await helper.resolve_source_name(news),
         tz_offset=tz_offset,
         topic_id=topic_override,
+        template=(await settings_service.get("moderation.card_template", "")) or None,
     )
     if message_id is not None:
         news.moderation_message_id = message_id
         await session.commit()
+
+    # Web Push to everyone who asked to hear about new items on moderation.
+    from shared.services.push_service import PushService
+
+    await PushService(session).broadcast(
+        "news_pending",
+        "Новость на модерации",
+        (news.title or news.original_title or "Без заголовка")[:120],
+        url=f"/news/{news.id}",
+    )
 
 
 @celery_app.task(name="workers.tasks.notify_moderation", bind=True, max_retries=2)
@@ -246,6 +257,41 @@ async def _schedule_publication(session, news: News) -> str:  # type: ignore[no-
     return slot.strftime("%H:%M")
 
 
+async def _refresh_card_after_publish(session, news: News) -> None:  # type: ignore[no-untyped-def]
+    """Update the moderation card after a successful publication.
+
+    Keeps the buttons — they are rebuilt from the fresh status, so a published
+    item shows "снять с публикации" instead of "одобрить".
+    """
+    import contextlib
+
+    if news is None or not news.moderation_message_id:
+        return
+    with contextlib.suppress(Exception):
+        from shared.services.news_moderation import NewsModerationService
+
+        line = (
+            "📤 Опубликовано"
+            if news.status == NewsStatus.PUBLISHED
+            else f"⚠️ Ошибка публикации: {(news.error or '')[:120]}"
+        )
+        await NewsModerationService(session).update_card(
+            news, status_line=line, keep_buttons=True
+        )
+        await session.commit()
+
+    with contextlib.suppress(Exception):
+        from shared.services.push_service import PushService
+
+        published = news.status == NewsStatus.PUBLISHED
+        await PushService(session).broadcast(
+            "news_published" if published else "news_failed",
+            "Новость опубликована" if published else "Ошибка публикации",
+            (news.title or news.original_title or "Без заголовка")[:120],
+            url=f"/news/{news.id}",
+        )
+
+
 @celery_app.task(name="workers.tasks.publish_news", bind=True, max_retries=3)
 def publish_news(self, news_id: int) -> dict:  # type: ignore[no-untyped-def]
     """Publish an approved news item to its city's channels."""
@@ -254,6 +300,10 @@ def publish_news(self, news_id: int) -> dict:  # type: ignore[no-untyped-def]
         async with session_scope() as session:
             news = await PublisherService(session).publish(news_id)
             await session.commit()
+            # Refresh the moderation card so it switches to the published button
+            # set (снять с публикации / удалить полностью) instead of keeping the
+            # pre-decision buttons.
+            await _refresh_card_after_publish(session, news)
             return {"news_id": news_id, "status": news.status.value}
 
     try:
@@ -467,3 +517,17 @@ def _delete_asset_files(asset) -> int:  # type: ignore[no-untyped-def]
         except OSError:
             pass
     return count
+
+
+@celery_app.task(name="workers.tasks.send_daily_digests")
+def send_daily_digests() -> dict:  # type: ignore[no-untyped-def]
+    """Send Telegram DM digests to users whose configured hour matches now."""
+
+    async def _run() -> dict:
+        async with session_scope() as session:
+            from shared.services.bot_notify import BotNotifyService
+
+            sent = await BotNotifyService(session).send_daily_digests()
+        return {"sent": sent}
+
+    return run_async(_run())

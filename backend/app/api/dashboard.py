@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from backend.app.deps import DBSession, require_permission
 from shared.enums import NewsOrigin, NewsStatus, Permission
@@ -16,7 +16,9 @@ from shared.models.source import Source
 from shared.models.user import User
 from shared.schemas.dashboard import (
     DashboardStats,
+    HourPoint,
     ServiceHealth,
+    SourceStat,
     StatusCount,
     SystemStatus,
     TimeSeriesPoint,
@@ -56,14 +58,50 @@ async def dashboard_stats(
         )
         or 0
     )
-    channels_by_city_rows = (
+    # Source throughput over the last 30 days: volume plus how much of it
+    # actually reached a channel. More actionable than a channel headcount.
+    month_ago = datetime.now(timezone.utc) - timedelta(days=30)
+    published_case = func.sum(
+        case((News.status == NewsStatus.PUBLISHED, 1), else_=0)
+    )
+    top_source_rows = (
         await session.execute(
-            select(City.name, func.count(Channel.id))
-            .join(Channel, Channel.city_id == City.id, isouter=True)
-            .group_by(City.id, City.name)
+            select(Source.name, func.count(News.id), published_case)
+            .join(News, News.source_id == Source.id)
+            .where(News.created_at >= month_ago)
+            .group_by(Source.id, Source.name)
+            .order_by(func.count(News.id).desc())
+            .limit(8)
         )
     ).all()
-    channels_by_city = [{"city": name, "count": count} for name, count in channels_by_city_rows]
+    top_sources = [
+        SourceStat(name=name, total=total or 0, published=int(published or 0))
+        for name, total, published in top_source_rows
+    ]
+
+    # Publications by hour of day — shows when the feed is busiest.
+    hour_rows = (
+        await session.execute(
+            select(
+                func.extract("hour", News.published_at).label("hour"),
+                func.count(),
+            )
+            .where(News.published_at.is_not(None), News.published_at >= month_ago)
+            .group_by("hour")
+        )
+    ).all()
+    hour_counts = {int(h): c for h, c in hour_rows if h is not None}
+    by_hour = [HourPoint(hour=h, count=hour_counts.get(h, 0)) for h in range(24)]
+
+    # Average time from ingest to publication, in minutes.
+    avg_seconds = await session.scalar(
+        select(
+            func.avg(
+                func.extract("epoch", News.published_at - News.created_at)
+            )
+        ).where(News.published_at.is_not(None), News.published_at >= month_ago)
+    )
+    avg_moderation_minutes = round(float(avg_seconds or 0) / 60, 1)
 
     # Bot usage statistics (news submitted by Telegram users).
     bot_submissions = (
@@ -118,7 +156,9 @@ async def dashboard_stats(
         total_sources=total_sources,
         total_channels=total_channels,
         active_channels=active_channels,
-        channels_by_city=channels_by_city,
+        top_sources=top_sources,
+        by_hour=by_hour,
+        avg_moderation_minutes=avg_moderation_minutes,
         bot_submissions=bot_submissions,
         bot_unique_users=bot_unique_users,
         bot_anonymous=bot_anonymous,
@@ -142,39 +182,79 @@ async def system_status(
     except Exception as exc:  # noqa: BLE001
         services.append(ServiceHealth(name="postgres", healthy=False, detail=str(exc)))
 
-    # Redis + queue depth
+    # Redis + queue depth. No task_routes are configured and the worker starts
+    # without -Q, so every task lands on the default "celery" list. The extra
+    # names are kept as a cheap safety net in case routing is added later.
     queue_depth = 0
     try:
         from shared.redis_client import get_redis
 
         redis = get_redis()
         await redis.ping()
-        queue_depth = int(await redis.llen("celery") or 0)
+        for queue in ("celery", "ingest", "publish", "ai", "media", "maintenance"):
+            try:
+                queue_depth += int(await redis.llen(queue) or 0)
+            except Exception:  # noqa: BLE001 - key of another type / missing
+                continue
         services.append(ServiceHealth(name="redis", healthy=True))
     except Exception as exc:  # noqa: BLE001
         services.append(ServiceHealth(name="redis", healthy=False, detail=str(exc)))
 
-    # Celery workers
+    # Celery workers. inspect() is blocking, so it runs in a thread to avoid
+    # stalling the event loop for the whole timeout.
     active_workers = 0
+    running_tasks = 0
+    worker_names: list[str] = []
     try:
+        import asyncio
+
         from workers.celery_app import celery_app
 
-        stats = celery_app.control.inspect(timeout=1).ping() or {}
-        active_workers = len(stats)
-        services.append(ServiceHealth(name="celery", healthy=active_workers > 0))
+        def _inspect() -> tuple[dict, dict, dict]:
+            inspector = celery_app.control.inspect(timeout=1.5)
+            return (
+                inspector.ping() or {},
+                inspector.active() or {},
+                inspector.reserved() or {},
+            )
+
+        pong, active, reserved = await asyncio.to_thread(_inspect)
+        worker_names = sorted(pong)
+        active_workers = len(worker_names)
+        running_tasks = sum(len(v or []) for v in active.values()) + sum(
+            len(v or []) for v in reserved.values()
+        )
+        services.append(
+            ServiceHealth(
+                name="celery",
+                healthy=active_workers > 0,
+                detail=None if active_workers else "воркеры не отвечают на ping",
+            )
+        )
     except Exception as exc:  # noqa: BLE001
         services.append(ServiceHealth(name="celery", healthy=False, detail=str(exc)))
 
-    # Host resources (best-effort; psutil optional).
+    # Host resources. psutil is a hard dependency now; keep the guard so a
+    # partial install degrades with an explanation instead of silent zeros.
     cpu_percent = 0.0
     memory_percent = 0.0
+    resources_detail: str | None = None
     try:
         import psutil
 
         cpu_percent = psutil.cpu_percent(interval=0.1)
         memory_percent = psutil.virtual_memory().percent
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        resources_detail = f"psutil недоступен: {exc}"
+
+    # Pipeline counters from the database — always populated.
+    async def _count(*conditions) -> int:  # type: ignore[no-untyped-def]
+        stmt = select(func.count()).select_from(News)
+        for cond in conditions:
+            stmt = stmt.where(cond)
+        return await session.scalar(stmt) or 0
+
+    midnight = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
     return SystemStatus(
         services=services,
@@ -182,4 +262,14 @@ async def system_status(
         memory_percent=memory_percent,
         queue_depth=queue_depth,
         active_workers=active_workers,
+        running_tasks=running_tasks,
+        workers=worker_names,
+        resources_detail=resources_detail,
+        pending_moderation=await _count(News.status == NewsStatus.PENDING),
+        scheduled=await _count(News.status == NewsStatus.SCHEDULED),
+        approved_waiting=await _count(News.status == NewsStatus.APPROVED),
+        failed=await _count(News.status == NewsStatus.FAILED),
+        published_today=await _count(
+            News.status == NewsStatus.PUBLISHED, News.published_at >= midnight
+        ),
     )

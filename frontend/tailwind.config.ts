@@ -18,7 +18,15 @@ const config: Config = {
           foreground: "hsl(var(--muted-foreground) / <alpha-value>)",
         },
         card: "hsl(var(--card) / <alpha-value>)",
-        sidebar: "hsl(var(--sidebar) / <alpha-value>)",
+        sidebar: {
+          DEFAULT: "hsl(var(--sidebar) / <alpha-value>)",
+          foreground: "hsl(var(--sidebar-foreground) / <alpha-value>)",
+          title: "hsl(var(--sidebar-title) / <alpha-value>)",
+          strong: "hsl(var(--sidebar-strong) / <alpha-value>)",
+          // These carry their own alpha, so they take no <alpha-value>.
+          hover: "hsl(var(--sidebar-hover))",
+          border: "hsl(var(--sidebar-border))",
+        },
         accent: "hsl(var(--accent) / <alpha-value>)",
       },
       borderRadius: { lg: "0.75rem", md: "0.5rem", sm: "0.375rem" },

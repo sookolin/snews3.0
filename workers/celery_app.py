@@ -60,6 +60,12 @@ celery_app.conf.beat_schedule = {
         "task": "workers.tasks.cleanup_temp_media",
         "schedule": crontab(hour=4, minute=30),
     },
+    # Check once per hour which users have their daily digest scheduled for
+    # the current hour and send the Telegram DM summary.
+    "daily-bot-digest": {
+        "task": "workers.tasks.send_daily_digests",
+        "schedule": crontab(minute=5),
+    },
 }
 
 _T = TypeVar("_T")

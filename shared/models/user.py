@@ -46,6 +46,15 @@ class User(Base, TimestampMixin):
     # Preferences
     language: Mapped[str] = mapped_column(String(8), default="ru", nullable=False)
 
+    # Notification preferences, edited in the personal cabinet:
+    #   {"push": {"news_pending": true, ...},
+    #    "bot": {"login": true, "daily_stats": true, "daily_time": "09:00"}}
+    notify_prefs: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+    # Web Push subscriptions (PWA / iOS home-screen), one entry per device:
+    #   [{"endpoint": "...", "keys": {"p256dh": "...", "auth": "..."}}]
+    push_subscriptions: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     def __repr__(self) -> str:  # pragma: no cover

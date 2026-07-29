@@ -128,7 +128,11 @@ async def _approve(
     await callback.answer(t("moderation.approved", lang))
     suffix = "" if slot == "immediate" else f" · в очереди на {slot}"
     scope = " · во все каналы" if all_cities else ""
-    await _mark_card(callback, f"✅ {t('moderation.approved', lang)} · {who}{suffix}{scope}")
+    await _mark_card(
+        callback,
+        f"✅ {t('moderation.approved', lang)} · {who}{suffix}{scope}",
+        keep_buttons=True,
+    )
 
 
 async def _unpublish(callback: CallbackQuery, news_id: int, lang: str) -> None:
@@ -173,7 +177,9 @@ async def _reject(callback: CallbackQuery, news_id: int, lang: str) -> None:
             who = user.full_name or user.email
         await session.commit()
     await callback.answer(t("moderation.rejected", lang))
-    await _mark_card(callback, f"❌ {t('moderation.rejected', lang)} · {who}")
+    await _mark_card(
+        callback, f"❌ {t('moderation.rejected', lang)} · {who}", keep_buttons=True
+    )
 
 
 async def _delete(

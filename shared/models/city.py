@@ -37,6 +37,15 @@ class City(Base, TimestampMixin):
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    #: ``city`` for a real city, ``other`` for non-geographic feeds such as
+    #: «Мировые новости» or «Интернет». ``other`` entries never receive news
+    #: matched to a city, and each of them becomes its own section in the panel.
+    kind: Mapped[str] = mapped_column(String(16), default="city", nullable=False)
+
+    #: Marks the entry that collects everything that matched no city (world /
+    #: unmatched news). Only meaningful for ``kind == "other"``.
+    is_world_bucket: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     # Telegram topic (thread) created automatically inside the moderation group
     telegram_topic_id: Mapped[int | None] = mapped_column(Integer)
 
