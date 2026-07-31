@@ -325,6 +325,28 @@ class RenderRequest(BaseModel):
     hide_source: bool | None = None
 
 
+async def _load_global_tags(session) -> list[dict]:  # type: ignore[no-untyped-def]
+    """Load global tags from settings, matching the publish path exactly.
+
+    Preview render endpoints must feed the renderer the same ``global_tags`` the
+    publisher does, otherwise ``{tag}`` placeholders (including premium tg-emoji)
+    render empty in the editor preview and moderation card.
+    """
+    import json as _json
+
+    from shared.services.settings_service import SettingsService
+
+    try:
+        raw = await SettingsService(session).get("templates.global_tags", "") or ""
+        if isinstance(raw, str) and raw.strip().startswith("["):
+            return _json.loads(raw)
+        if isinstance(raw, list):
+            return raw
+    except Exception:  # noqa: BLE001 - preview must never fail over settings
+        pass
+    return []
+
+
 @router.post("/{news_id}/render", response_model=Message)
 async def render_news_preview(
     news_id: int,
@@ -379,6 +401,7 @@ async def render_news_preview(
         city=city_name,
         author=author,
         emoji=payload.emoji if payload.emoji is not None else (news.emoji or ""),
+        global_tags=await _load_global_tags(session),
     )
     return Message(detail=rendered)
 
@@ -453,6 +476,7 @@ async def render_news(
         city=city_name,
         author=author,
         emoji=news.emoji or "",
+        global_tags=await _load_global_tags(session),
     )
     return Message(detail=rendered)
 
@@ -728,3 +752,61 @@ async def delete_news(
         **meta,
     )
     return Message(detail="Новость удалена")
+
+
+class CopyToCityPayload(BaseModel):
+    city_id: int
+    publish_immediately: bool = False
+
+
+@router.post("/{news_id}/copy-to-city", response_model=NewsOut, status_code=201)
+async def copy_news_to_city(
+    news_id: int,
+    payload: CopyToCityPayload,
+    session: DBSession,
+    meta: ClientMeta,
+    actor: User = Depends(require_permission(Permission.NEWS_PUBLISH)),
+) -> NewsOut:
+    """Clone a news item for another city, optionally publishing immediately."""
+    original = await _get_news(session, news_id)
+
+    news = News(
+        original_title=original.original_title,
+        original_text=original.original_text,
+        original_url=original.original_url,
+        title=original.title,
+        text=original.text,
+        emoji=original.emoji,
+        city_id=payload.city_id,
+        source_id=original.source_id,
+        template_id=original.template_id,
+        origin=original.origin,
+        status=NewsStatus.APPROVED if payload.publish_immediately else NewsStatus.PENDING,
+        author_name=original.author_name,
+        source_name=original.source_name,
+        hide_source=original.hide_source,
+        source_url_override=original.source_url_override,
+        buttons=original.buttons or [],
+        apply_watermark=original.apply_watermark,
+        is_world_news=False,
+        moderated_by=actor.id,
+        processed_at=datetime.now(timezone.utc),
+    )
+    session.add(news)
+    await session.flush()
+
+    if payload.publish_immediately:
+        from workers.tasks import publish_news as task
+        task.delay(news.id)
+
+    await AuditService(session).log(
+        "news.copy_to_city",
+        user_id=actor.id,
+        actor=actor.email,
+        entity_type="news",
+        entity_id=news.id,
+        changes={"copied_from": news_id, "city_id": payload.city_id, "publish_immediately": payload.publish_immediately},
+        **meta,
+    )
+    await session.refresh(news)
+    return NewsOut.model_validate(news)

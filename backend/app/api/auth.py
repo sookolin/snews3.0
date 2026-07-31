@@ -54,6 +54,8 @@ async def login(payload: LoginRequest, session: DBSession, request: Request) -> 
         raise AuthenticationError("Invalid credentials", code="invalid_credentials")
     if not user.is_active:
         raise AuthenticationError("User is inactive", code="user_inactive")
+    if user.is_banned:
+        raise AuthenticationError("Account is banned", code="user_banned")
 
     if user.is_2fa_enabled:
         if not payload.totp_code:
@@ -134,6 +136,10 @@ async def login_telegram(payload: TelegramLoginRequest, session: DBSession) -> T
         raise AuthenticationError(
             "Этот Telegram-аккаунт не привязан к пользователю", code="telegram_not_linked"
         )
+
+    # Keep the avatar in sync each time the user logs in via Telegram.
+    if payload.photo_url:
+        user.photo_url = payload.photo_url
 
     await _after_login(session, user)
     return TokenPair(

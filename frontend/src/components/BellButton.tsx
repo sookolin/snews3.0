@@ -1,10 +1,11 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Bell, Check, X } from "lucide-react";
-import useSWR, { mutate as globalMutate } from "swr";
+import useSWR from "swr";
 import { api, fetcher } from "@/lib/api";
 import { useRouter } from "next/navigation";
+import { useRoleLabels } from "@/lib/roles";
 
 interface AppNotification {
   id: number;
@@ -18,17 +19,69 @@ interface AppNotification {
 
 const POLL_MS = 30_000;
 
+/** Play a short two-tone ping using Web Audio API — no asset required. */
+function playPing() {
+  try {
+    const ctx = new (window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    const play = (freq: number, start: number, dur: number) => {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = freq;
+      osc.type = "sine";
+      gain.gain.setValueAtTime(0.18, ctx.currentTime + start);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
+      osc.start(ctx.currentTime + start);
+      osc.stop(ctx.currentTime + start + dur);
+    };
+    play(880, 0,    0.12);
+    play(1100, 0.13, 0.10);
+  } catch {
+    // Audio blocked or unsupported — silently skip.
+  }
+}
+
+/**
+ * Replace raw role keys in a notification body with their display labels.
+ * The backend writes e.g. «super_admin» — we turn it into «Супер-админ».
+ */
+function translateRoles(text: string | undefined, labels: Record<string, string>): string {
+  if (!text) return "";
+  return Object.entries(labels).reduce(
+    (s, [key, label]) => s.replaceAll(`«${key}»`, `«${label}»`),
+    text
+  );
+}
+
 export function BellButton() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const ref     = useRef<HTMLDivElement>(null);
+  const prevUnread = useRef<number>(0);
+  const labels  = useRoleLabels();
+
   const { data, mutate } = useSWR<AppNotification[]>("/notifications?limit=50", fetcher, {
     refreshInterval: POLL_MS,
     revalidateOnFocus: true,
   });
 
-  const items = data ?? [];
+  // Heartbeat: ping presence every 60s while tab is active
+  useEffect(() => {
+    const ping = () => api("/profile/heartbeat", { method: "POST" }).catch(() => {});
+    ping(); // initial
+    const timer = setInterval(ping, 60_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const items  = data ?? [];
   const unread = items.filter((n) => !n.is_read).length;
+
+  // Play a sound when unread count increases (new notifications arrived).
+  useEffect(() => {
+    if (unread > prevUnread.current) playPing();
+    prevUnread.current = unread;
+  }, [unread]);
 
   const markRead = async (id: number) => {
     await api(`/notifications/${id}/read`, { method: "POST" });
@@ -65,10 +118,7 @@ export function BellButton() {
       {open && (
         <>
           {/* Backdrop */}
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => setOpen(false)}
-          />
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           {/* Dropdown */}
           <div className="absolute right-0 top-full z-50 mt-1.5 w-80 origin-top-right animate-in">
             <div className="card overflow-hidden">
@@ -84,10 +134,7 @@ export function BellButton() {
                       <Check className="h-3.5 w-3.5" />
                     </button>
                   )}
-                  <button
-                    className="btn-icon h-6 w-6"
-                    onClick={() => setOpen(false)}
-                  >
+                  <button className="btn-icon h-6 w-6" onClick={() => setOpen(false)}>
                     <X className="h-3.5 w-3.5" />
                   </button>
                 </div>
@@ -115,7 +162,7 @@ export function BellButton() {
                         <div className="text-sm font-medium leading-snug">{n.title}</div>
                         {n.body && (
                           <div className="mt-0.5 text-xs text-muted-foreground line-clamp-2">
-                            {n.body}
+                            {translateRoles(n.body, labels)}
                           </div>
                         )}
                         <div className="mt-1 text-[11px] text-muted-foreground">

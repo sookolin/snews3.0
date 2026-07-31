@@ -155,7 +155,7 @@ class TelegramPublisher(BasePublisher):
 
         A ``<tg-emoji>`` entity the bot may not use makes the whole send fail.
         Rather than lose the post, the text is retried with the emoji's fallback
-        character.
+        character (graceful degradation).
         """
         result = await self._publish(request)
         if (
@@ -164,10 +164,15 @@ class TelegramPublisher(BasePublisher):
             and _is_custom_emoji_error(result.error)
         ):
             log.warning(
-                "retry_without_custom_emoji", channel=self.channel.id, error=result.error
+                "retry_without_custom_emoji",
+                channel=self.channel.id,
+                error=result.error,
+                had_emoji=bool("<tg-emoji" in (request.text or "")),
             )
             request.text = strip_custom_emoji(request.text)
             result = await self._publish(request)
+            if result.success:
+                log.info("custom_emoji_fallback_success", channel=self.channel.id)
         return result
 
     async def _publish(self, request: PublishRequest) -> PublishResult:  # noqa: C901
@@ -211,26 +216,27 @@ class TelegramPublisher(BasePublisher):
                 # single-only types (voice, video_note, animation) go separately.
                 groups = self._split_media_groups(enabled_media)
 
-                # A caption over Telegram's 1024-char limit would be truncated,
-                # cutting off the footer (subscribe link, custom emoji). In that
-                # case send the media without a caption and the full text as a
-                # separate message so nothing is lost.
-                caption_fits = len(text) <= _TELEGRAM_CAPTION_LIMIT
+                # Always put the text (truncated to caption limit) on the first
+                # album so the text appears alongside the photos, not after them.
+                # If the full text exceeds the caption limit, send the complete
+                # text as a reply to the first album message afterwards.
                 caption_used = False
                 for group in groups:
-                    caption = None if (caption_used or not caption_fits) else text
+                    caption = text[:_TELEGRAM_CAPTION_LIMIT] if not caption_used else None
                     # Everything past the first album is attached as a reply to
                     # the first message, so >10 attachments read as one post
                     # instead of a wall of unrelated albums.
                     target = common if not message_ids else self._reply_to(common, message_ids[0])
                     ids = await self._send_group(
                         bot, group, caption, target,
-                        keyboard if (not caption_used and caption_fits) else None,
+                        keyboard if not caption_used else None,
                     )
                     message_ids.extend(ids)
                     caption_used = True
 
-                if not caption_fits:
+                if len(text) > _TELEGRAM_CAPTION_LIMIT:
+                    # Send the full text as a threaded reply so readers can
+                    # expand it; the caption already shows the beginning.
                     msg = await bot.send_message(
                         text=text,
                         parse_mode=ParseMode.HTML,

@@ -80,12 +80,28 @@ async def create_world_topic(
     service = SettingsService(session)
     await service.set("telegram.world_topic_id", topic_id, category="telegram")
 
-    # Also update the world-bucket city so its topic_id stays in sync.
+    # Update or create the world-bucket city so it appears in the news tabs
+    # and the city list without a separate manual step.
     world_city = await session.scalar(
         select(City).where(City.is_world_bucket.is_(True)).limit(1)
     )
     if world_city is not None:
         world_city.telegram_topic_id = topic_id
+    else:
+        # Auto-create the section so the news page shows a world tab immediately.
+        world_city = City(
+            name=payload.name,
+            slug=f"world-bucket-{topic_id}",
+            kind="other",
+            is_world_bucket=True,
+            is_active=True,
+            telegram_topic_id=topic_id,
+            language="ru",
+            keywords=[],
+            extra_keywords=[],
+            exclude_keywords=[],
+        )
+        session.add(world_city)
     await session.commit()
 
     return {"topic_id": topic_id}

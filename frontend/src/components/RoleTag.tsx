@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { useRoleLabels } from "@/lib/roles";
+import { useRoleLabels, useRoleColors } from "@/lib/roles";
 
 /**
  * Role labels and colours, ordered by access level: the higher the role, the
@@ -50,15 +50,31 @@ export const ROLE_LABELS: Record<string, string> = Object.fromEntries(
  */
 export function RoleTag({ name, role }: { name: string; role?: string }) {
   const labels = useRoleLabels();
+  const colors = useRoleColors();
   const base = role ? ROLE_META[role] : undefined;
   // Role names are renamable, so the label comes from the API, not ROLE_META.
   const meta = base && role ? { ...base, label: labels[role] ?? base.label } : undefined;
+
+  // Use dynamic colors from the API if available, otherwise fallback to static classes
+  const color = role ? colors[role] : undefined;
+  // .badge uses ring-1 ring-inset (box-shadow), not border — so borderColor has
+  // no visual effect. Override with an inset box-shadow that matches the ring.
+  const dynamicStyle = color
+    ? {
+        backgroundColor: `${color}22`,
+        color: color,
+        boxShadow: `0 0 0 1px ${color}55 inset`,
+      }
+    : undefined;
+
   return (
     <span
       className={cn(
         "badge whitespace-nowrap",
-        meta?.className ?? "bg-slate-50 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700"
+        // Only apply static className when no dynamic color is available
+        !dynamicStyle && (meta?.className ?? "bg-slate-50 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700")
       )}
+      style={dynamicStyle}
       title={meta ? `${name} · ${meta.label}` : name}
     >
       {name}

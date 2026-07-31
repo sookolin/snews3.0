@@ -27,6 +27,7 @@ class User(Base, TimestampMixin):
         nullable=False,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_banned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # 2FA
     is_2fa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -38,6 +39,10 @@ class User(Base, TimestampMixin):
     # Linked external accounts (OAuth login)
     yandex_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
     vk_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+
+    # Avatar URL fetched from the OAuth provider (Telegram / VK / Yandex).
+    # Stored as-is; the UI falls back to initials when absent.
+    photo_url: Mapped[str | None] = mapped_column(String(1024))
 
     # Per-user permission overrides on top of the role:
     #   {"grant": ["news:publish"], "deny": ["news:delete"]}

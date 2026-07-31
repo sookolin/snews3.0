@@ -36,6 +36,7 @@ class TemplateRenderer:
         emoji: str = "",
         published_at: datetime | None = None,
         link: str = "",
+        global_tags: dict | None = None,
     ) -> str:
         """Return the fully rendered publication text.
 
@@ -79,6 +80,23 @@ class TemplateRenderer:
         if str(_vars_raw.get("show_source", "1")) == "0":
             source = ""
             source_url = ""
+        # Merge global tags from settings (lowest priority — overridden by template vars).
+        # global_tags is a list of {"key":..., "value":..., "custom_emoji_id":...}
+        for gt in (global_tags or []):
+            k = gt.get("key", "")
+            if not k:
+                continue
+            # custom_emoji_id renders as Telegram premium emoji tag when present
+            cid = gt.get("custom_emoji_id", "")
+            val = gt.get("value", "")
+            if cid:
+                # Use custom emoji with fallback to value (or default star if empty)
+                fallback = val if val else "⭐"
+                val = f'<tg-emoji emoji-id="{cid}">{fallback}</tg-emoji>'
+            else:
+                # Regular text value
+                val = str(val) if val else ""
+            variables.setdefault(k, val)
         # Merge custom template variables (already assumed safe / author-provided).
         for key, value in (template.variables or {}).items():
             variables.setdefault(key, str(value))

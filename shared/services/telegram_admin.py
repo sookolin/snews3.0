@@ -420,27 +420,40 @@ class TelegramAdminService:
         info.append("Статус: " + status)
 
         if template:
-            values = {
-                "post": post,
-                "id": str(news.id),
-                "place": place,
-                "city": city.name,
-                "score": score,
-                "source_time": fmt(news.source_published_at),
-                "processed_at": fmt(news.processed_at),
-                "moderator": moderator or "—",
-                "reply_to": str(news.reply_to_news_id or ""),
-                "status": status,
-                "title": f"{emoji} {title}".strip(),
-                "url": news.original_url or "",
-                "source": source_name or "",
-            }
-            out = template
-            for key, value in values.items():
-                out = out.replace("{" + key + "}", value)
-            # Drop lines whose only placeholder resolved to nothing.
-            lines = [ln for ln in out.split("\n") if ln.strip() not in ("", "—")]
-            return "\n".join(lines)
+            # Support both legacy plain-string and new JSON-per-status format.
+            import json as _json
+            resolved: str | None = None
+            if template.strip().startswith("{"):
+                try:
+                    tpl_map: dict = _json.loads(template)
+                    resolved = tpl_map.get(news.status.value) or None
+                except Exception:  # noqa: BLE001
+                    resolved = template  # fallback: treat whole string as template
+            else:
+                resolved = template
+
+            if resolved:
+                values = {
+                    "post": post,
+                    "id": str(news.id),
+                    "place": place,
+                    "city": city.name,
+                    "score": score,
+                    "source_time": fmt(news.source_published_at),
+                    "processed_at": fmt(news.processed_at),
+                    "moderator": moderator or "—",
+                    "reply_to": str(news.reply_to_news_id or ""),
+                    "status": status,
+                    "title": f"{emoji} {title}".strip(),
+                    "url": news.original_url or "",
+                    "source": source_name or "",
+                }
+                out = resolved
+                for key, value in values.items():
+                    out = out.replace("{" + key + "}", value)
+                # Drop lines whose only placeholder resolved to nothing.
+                lines = [ln for ln in out.split("\n") if ln.strip() not in ("", "—")]
+                return "\n".join(lines)
 
         return f"{post}\n\n" + "\n".join(info)
 

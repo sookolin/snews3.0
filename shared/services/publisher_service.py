@@ -136,6 +136,19 @@ class PublisherService:
             if needs_processing:
                 await self.media_service.process_asset(asset, apply_watermark=news.apply_watermark)
 
+        # Load global tags from settings once per publish call.
+        global_tags: list[dict] = []
+        try:
+            import json as _json
+            from shared.services.settings_service import SettingsService
+            _raw = await SettingsService(self.session).get("templates.global_tags", "") or ""
+            if isinstance(_raw, str) and _raw.strip().startswith("["):
+                global_tags = _json.loads(_raw)
+            elif isinstance(_raw, list):
+                global_tags = _raw
+        except Exception:
+            pass
+
         published: dict[str, list[int]] = {}
         errors: list[str] = []
 
@@ -161,6 +174,7 @@ class PublisherService:
                 # {link} points at the channel this copy is published to, so one
                 # template serves every city.
                 link=channel_subscribe_link(channel),
+                global_tags=global_tags,
             )
 
             publisher_cls = publisher_registry.get("telegram")

@@ -8,6 +8,7 @@ a channel username, ``t.me/<name>`` or the full preview URL.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from urllib.parse import urlparse
 
 from shared.enums import MediaType, SourceType
@@ -66,6 +67,19 @@ class TelegramParser(BaseParser):
             link_node = wrap.select_one("a.tgme_widget_message_date")
             post_url = link_node.get("href") if link_node else None
 
+            # Parse the post timestamp from the <time datetime="..."> element
+            # inside the message date link so we can populate source_published_at.
+            published_at: datetime | None = None
+            time_node = wrap.select_one("a.tgme_widget_message_date time[datetime]")
+            if time_node:
+                raw_dt = time_node.get("datetime", "")
+                try:
+                    published_at = datetime.fromisoformat(
+                        raw_dt.replace("Z", "+00:00") if isinstance(raw_dt, str) else ""
+                    )
+                except (ValueError, TypeError):
+                    pass
+
             media: list[ParsedMedia] = []
             for photo in wrap.select(".tgme_widget_message_photo_wrap"):
                 style = photo.get("style", "")
@@ -85,6 +99,7 @@ class TelegramParser(BaseParser):
                     url=post_url,
                     guid=post_url,
                     media=media,
+                    published_at=published_at,
                 )
             )
 

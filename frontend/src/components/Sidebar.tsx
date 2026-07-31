@@ -1,19 +1,18 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Newspaper, Radio, Building2, Send, FileText,
   Droplets, Image as ImageIcon, Bot, ListChecks, Users, ScrollText,
-  Settings, LogOut, Sun, Moon, SunMoon, Megaphone, PlusCircle,
-  PanelLeftClose, PanelLeftOpen, UserCircle,
+  Settings, Megaphone, PlusCircle,
+  PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { cn } from "@/lib/utils";
-import { clearTokens, fetcher } from "@/lib/api";
+import { fetcher } from "@/lib/api";
 import { getPreviewRole, setPreviewRole, useRoleLabels } from "@/lib/roles";
-import { useTheme } from "next-themes";
 
 const SECTIONS: { title: string; items: { href: string; label: string; icon: typeof Newspaper }[] }[] = [
   {
@@ -71,12 +70,6 @@ const ITEM_PERMISSION: Record<string, string> = {
   "/settings": "settings:manage",
 };
 
-const THEMES = [
-  { value: "dark", label: "Тёмная тема", icon: Moon },
-  { value: "light", label: "Светлая тема", icon: Sun },
-  { value: "dim", label: "Светлая + меню", icon: SunMoon },
-] as const;
-
 export function Sidebar({
   onCollapse,
   iconOnly = false,
@@ -85,8 +78,6 @@ export function Sidebar({
   iconOnly?: boolean;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
-  const { setTheme, theme } = useTheme();
 
   const [previewRole, setRole] = useState<string | null>(null);
   useEffect(() => {
@@ -100,7 +91,7 @@ export function Sidebar({
     "/users/permissions",
     fetcher
   );
-  const { data: me } = useSWR<{ email: string; full_name?: string; role: string }>(
+  const { data: me } = useSWR<{ email: string; full_name?: string; role: string; photo_url?: string | null }>(
     "/auth/me",
     fetcher,
     { revalidateOnFocus: false }
@@ -113,33 +104,12 @@ export function Sidebar({
     return allowed.includes(need);
   };
 
-  const logout = () => {
-    clearTokens();
-    router.push("/login");
-  };
-
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-
-  const current = mounted ? THEMES.findIndex((t) => t.value === theme) : -1;
-  const next = THEMES[(current + 1) % THEMES.length];
-  const NextIcon = next.icon;
-
-  const cycleTheme = () => {
-    const root = document.documentElement;
-    root.classList.add("theme-anim");
-    window.setTimeout(() => root.classList.remove("theme-anim"), 300);
-    setTheme(next.value);
-  };
-
-  const initials = (me?.full_name || me?.email || "?").slice(0, 2).toUpperCase();
-
   // Icon-only: compact strip showing only icons with tooltips.
   if (iconOnly) {
     return (
       <aside className="flex h-full min-h-screen w-16 shrink-0 flex-col items-center bg-sidebar text-sidebar-foreground">
         {/* Logo / expand button */}
-        <div className="flex h-16 w-full items-center justify-center border-b border-sidebar-border">
+        <div className="flex h-14 w-full items-center justify-center border-b border-sidebar-border">
           {onCollapse ? (
             <button
               onClick={onCollapse}
@@ -177,46 +147,14 @@ export function Sidebar({
           })}
         </nav>
 
-        {/* Bottom icons */}
-        <div className="flex flex-col items-center gap-1 border-t border-sidebar-border py-3">
-          <Link
-            href="/profile"
-            title="Личный кабинет"
-            aria-label="Личный кабинет"
-            className={cn(
-              "flex h-10 w-10 items-center justify-center rounded-md transition-colors",
-              pathname === "/profile"
-                ? "bg-sky-600 text-white"
-                : "hover:bg-sidebar-hover hover:text-sidebar-strong"
-            )}
-          >
-            <UserCircle className="h-5 w-5" />
-          </Link>
-          <button
-            onClick={cycleTheme}
-            title={next.label}
-            aria-label={next.label}
-            className="flex h-10 w-10 items-center justify-center rounded-md transition-colors hover:bg-sidebar-hover hover:text-sidebar-strong"
-          >
-            <NextIcon className="h-5 w-5" />
-          </button>
-          <button
-            onClick={logout}
-            title="Выйти"
-            aria-label="Выйти"
-            className="flex h-10 w-10 items-center justify-center rounded-md transition-colors hover:bg-sidebar-hover hover:text-sidebar-strong"
-          >
-            <LogOut className="h-5 w-5" />
-          </button>
-        </div>
-      </aside>
+        </aside>
     );
   }
 
   // Full sidebar.
   return (
     <aside className="flex h-full min-h-screen w-60 shrink-0 flex-col bg-sidebar text-sidebar-foreground">
-      <div className="flex h-16 items-center gap-2 border-b border-sidebar-border px-5 text-sidebar-strong">
+      <div className="flex h-14 items-center gap-2 border-b border-sidebar-border px-5 text-sidebar-strong">
         <ImageIcon className="h-6 w-6 text-sky-400" />
         <span className="text-lg font-semibold tracking-wide">SNEWS</span>
         {onCollapse && (
@@ -273,43 +211,38 @@ export function Sidebar({
           );
         })}
       </nav>
-      <div className="space-y-2 border-t border-sidebar-border p-3">
+
+      {/* Current user strip at the bottom */}
+      {me && (
         <Link
           href="/profile"
-          className={cn(
-            "flex items-center gap-3 rounded-md px-3 py-2 transition-colors",
-            pathname === "/profile"
-              ? "bg-sky-600 text-white"
-              : "hover:bg-sidebar-hover hover:text-sidebar-strong"
+          className="flex items-center gap-2.5 border-t border-sidebar-border px-4 py-3 text-sm hover:bg-sidebar-hover"
+          title="Личный кабинет"
+        >
+          {me.photo_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={me.photo_url}
+              alt={me.full_name || me.email}
+              className="h-7 w-7 shrink-0 rounded-full object-cover"
+              width={28}
+              height={28}
+            />
+          ) : (
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-sky-600/20 text-xs font-semibold text-sky-600 dark:text-sky-300">
+              {(me.full_name || me.email || "?").slice(0, 2).toUpperCase()}
+            </span>
           )}
-        >
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sky-600/20 text-xs font-semibold text-sky-300">
-            {initials}
-          </span>
-          <span className="min-w-0 flex-1 leading-tight">
-            <span className="block truncate text-sm font-medium">
-              {me?.full_name || me?.email || "Личный кабинет"}
-            </span>
-            <span className="block truncate text-[11px] opacity-70">
-              {me ? labels[me.role] ?? me.role : "Профиль и уведомления"}
-            </span>
-          </span>
-          <UserCircle className="h-4 w-4 shrink-0 opacity-70" />
+          <div className="min-w-0">
+            <div className="truncate font-medium text-sidebar-strong">
+              {me.full_name || me.email}
+            </div>
+            <div className="truncate text-[11px] text-sidebar-foreground/60">
+              {labels[me.role] ?? me.role}
+            </div>
+          </div>
         </Link>
-        <button
-          onClick={cycleTheme}
-          className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors hover:bg-sidebar-hover hover:text-sidebar-strong"
-        >
-          <NextIcon className="h-4 w-4" />
-          <span>{next.label}</span>
-        </button>
-        <button
-          onClick={logout}
-          className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors hover:bg-sidebar-hover hover:text-sidebar-strong"
-        >
-          <LogOut className="h-4 w-4" /> Выйти
-        </button>
-      </div>
-    </aside>
+      )}
+      </aside>
   );
 }

@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from backend.app.deps import ClientMeta, CurrentUser, DBSession, require_permission
-from shared.enums import Permission
+from shared.enums import Permission, UserRole
 from shared.models.user import User
 from shared.schemas.common import Message, Page, PaginationParams
 from shared.schemas.user import UserCreate, UserOut, UserUpdate
@@ -130,10 +130,14 @@ async def set_role_colors(
 @router.get("", response_model=Page[UserOut])
 async def list_users(
     session: DBSession,
+    actor: User = Depends(require_permission(Permission.USER_VIEW)),
     params: PaginationParams = Depends(),
-    _: User = Depends(require_permission(Permission.USER_VIEW)),
 ) -> Page[UserOut]:
     users, total = await UserService(session).list(params.offset, params.size)
+    # Super admins are only visible to other super admins.
+    if actor.role != UserRole.SUPER_ADMIN:
+        users = [u for u in users if u.role != UserRole.SUPER_ADMIN]
+        total = len(users)
     return Page.create([UserOut.model_validate(u) for u in users], total, params)
 
 
@@ -174,6 +178,16 @@ async def update_user(
     meta: ClientMeta,
     actor: User = Depends(require_permission(Permission.USER_MANAGE)),
 ) -> UserOut:
+    # Snapshot fields we watch before the update.
+    target_before = await UserService(session).get_or_404(user_id)
+    old_role = target_before.role
+    old_active = target_before.is_active
+    old_full_name = target_before.full_name
+    old_email = target_before.email
+    old_telegram_id = target_before.telegram_id
+    old_yandex_id = target_before.yandex_id
+    old_vk_id = target_before.vk_id
+
     user = await UserService(session).update(user_id, payload)
     await AuditService(session).log(
         "user.update",
@@ -184,7 +198,150 @@ async def update_user(
         changes=payload.model_dump(exclude_unset=True, exclude={"password"}),
         **meta,
     )
+
+    # Create in-app notifications for significant account changes.
+    from shared.models.notification import Notification
+    from datetime import datetime, timezone
+
+    changes = payload.model_dump(exclude_unset=True)
+    notifications: list[Notification] = []
+
+    FIELD_LABELS = {
+        "full_name": "имя",
+        "email": "email",
+        "telegram_id": "Telegram ID",
+        "yandex_id": "Яндекс ID",
+        "vk_id": "VK ID",
+    }
+
+    if "role" in changes and changes["role"] != old_role:
+        old_key = old_role.value if hasattr(old_role, "value") else str(old_role)
+        new_role = changes["role"]
+        new_key = new_role.value if hasattr(new_role, "value") else str(new_role)
+        notifications.append(
+            Notification(
+                user_id=user_id,
+                type="role_changed",
+                title="Ваша роль изменена",
+                body=f"Роль изменена с «{old_key}» на «{new_key}»",
+                url="/profile",
+                is_read=False,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+
+    if "is_active" in changes and changes["is_active"] != old_active:
+        if not changes["is_active"]:
+            notifications.append(
+                Notification(
+                    user_id=user_id,
+                    type="account_deactivated",
+                    title="Ваш аккаунт деактивирован",
+                    body="Администратор деактивировал ваш аккаунт.",
+                    url=None,
+                    is_read=False,
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+        else:
+            notifications.append(
+                Notification(
+                    user_id=user_id,
+                    type="account_activated",
+                    title="Ваш аккаунт активирован",
+                    body="Ваш аккаунт был активирован администратором.",
+                    url="/",
+                    is_read=False,
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+
+    # Notify about profile data changes (name, email, social IDs, etc.)
+    changed_data: list[str] = []
+    for field, label in FIELD_LABELS.items():
+        if field not in changes:
+            continue
+        old_val = {
+            "full_name": old_full_name,
+            "email": old_email,
+            "telegram_id": old_telegram_id,
+            "yandex_id": old_yandex_id,
+            "vk_id": old_vk_id,
+        }.get(field)
+        if changes[field] != old_val:
+            changed_data.append(label)
+    if changed_data:
+        notifications.append(
+            Notification(
+                user_id=user_id,
+                type="profile_updated",
+                title="Данные аккаунта изменены администратором",
+                body=f"Изменено: {', '.join(changed_data)}.",
+                url="/profile",
+                is_read=False,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+
+    if changes.get("password"):
+        notifications.append(
+            Notification(
+                user_id=user_id,
+                type="password_changed",
+                title="Пароль изменён администратором",
+                body="Администратор изменил ваш пароль. Если вы не запрашивали это — обратитесь в поддержку.",
+                url="/profile",
+                is_read=False,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+
+    for notif in notifications:
+        session.add(notif)
+    if notifications:
+        await session.flush()
+
     return UserOut.model_validate(user)
+
+
+@router.post("/{user_id}/reset-2fa", response_model=Message)
+async def reset_user_2fa(
+    user_id: int,
+    session: DBSession,
+    meta: ClientMeta,
+    actor: User = Depends(require_permission(Permission.USER_MANAGE)),
+) -> Message:
+    """Disable TOTP 2FA for a user (admin action)."""
+    from datetime import datetime, timezone
+
+    user = await UserService(session).get_or_404(user_id)
+    user.totp_secret = None
+    user.is_2fa_enabled = False
+    await session.flush()
+
+    # Notify the affected user
+    from shared.models.notification import Notification
+
+    session.add(
+        Notification(
+            user_id=user_id,
+            type="2fa_reset",
+            title="Двухфакторная аутентификация сброшена",
+            body=f"Администратор {actor.email} отключил 2FA для вашего аккаунта.",
+            url="/profile",
+            is_read=False,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    await AuditService(session).log(
+        "user.reset_2fa",
+        user_id=actor.id,
+        actor=actor.email,
+        entity_type="user",
+        entity_id=user_id,
+        **meta,
+    )
+    return Message(detail="2FA отключена")
 
 
 @router.delete("/{user_id}", response_model=Message)
@@ -204,3 +361,69 @@ async def delete_user(
         **meta,
     )
     return Message(detail="User deleted")
+
+
+@router.post("/{user_id}/ban", response_model=UserOut)
+async def ban_user(
+    user_id: int,
+    session: DBSession,
+    meta: ClientMeta,
+    actor: User = Depends(require_permission(Permission.USER_MANAGE)),
+) -> UserOut:
+    """Ban a user account. Banned users cannot log in by any method."""
+    from shared.services.notify_router import notify_user
+
+    user = await UserService(session).get_or_404(user_id)
+    user.is_banned = True
+    await session.flush()
+
+    await notify_user(
+        session, user,
+        type="account_deactivated",
+        title="Ваш аккаунт заблокирован",
+        body=f"Администратор {actor.email} заблокировал ваш аккаунт.",
+        force_dm=True,
+    )
+    await AuditService(session).log(
+        "user.ban",
+        user_id=actor.id,
+        actor=actor.email,
+        entity_type="user",
+        entity_id=user_id,
+        **meta,
+    )
+    await session.refresh(user)
+    return UserOut.model_validate(user)
+
+
+@router.post("/{user_id}/unban", response_model=UserOut)
+async def unban_user(
+    user_id: int,
+    session: DBSession,
+    meta: ClientMeta,
+    actor: User = Depends(require_permission(Permission.USER_MANAGE)),
+) -> UserOut:
+    """Remove a ban from a user account."""
+    from shared.services.notify_router import notify_user
+
+    user = await UserService(session).get_or_404(user_id)
+    user.is_banned = False
+    await session.flush()
+
+    await notify_user(
+        session, user,
+        type="account_activated",
+        title="Ваш аккаунт разблокирован",
+        body="Администратор разблокировал ваш аккаунт.",
+        url="/",
+    )
+    await AuditService(session).log(
+        "user.unban",
+        user_id=actor.id,
+        actor=actor.email,
+        entity_type="user",
+        entity_id=user_id,
+        **meta,
+    )
+    await session.refresh(user)
+    return UserOut.model_validate(user)

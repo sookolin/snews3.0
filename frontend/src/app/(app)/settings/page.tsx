@@ -112,13 +112,7 @@ const META: Record<string, { label: string; hint: string; group: string }> = {
     hint: "Во всех сообщениях модерации время показывается с этим сдвигом. Для Москвы 3.",
     group: "Интерфейс",
   },
-  "telegram.world_topic_id": {
-    label: "Topic ID мировых новостей",
-    hint:
-      "Отдельная ветка в группе модерации для новостей, не относящихся ни к одному городу. " +
-      "Создайте через кнопку в разделе «Города и разделы».",
-    group: "Telegram",
-  },
+  // telegram.world_topic_id removed — managed in Cities section
   "ui.default_language": {
     label: "Язык по умолчанию",
     hint: "Язык интерфейса и сообщений (ru/en).",
@@ -137,7 +131,7 @@ const META: Record<string, { label: string; hint: string; group: string }> = {
 };
 
 /** Settings whose value is a multi-line template, not a short field. */
-const MULTILINE = new Set(["moderation.card_template"]);
+const MULTILINE = new Set<string>([]);
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Record<string, unknown>>({});
@@ -186,10 +180,12 @@ export default function SettingsPage() {
 
   const hasChanges = Object.keys(dirty).some((k) => dirty[k] !== settings[k]);
 
-  // Group settings by their META group (fallback: "Прочее").
+  // Group settings by their META group. Keys not in META are hidden entirely
+  // (they have no human-readable label and should not appear in the UI).
   const groups: Record<string, string[]> = {};
   for (const key of Object.keys(settings)) {
-    const g = META[key]?.group ?? "Прочее";
+    if (!META[key]) continue; // skip unknown keys like moderation.card_template
+    const g = META[key].group;
     (groups[g] ??= []).push(key);
   }
 
@@ -258,13 +254,6 @@ export default function SettingsPage() {
                 );
               })}
             </div>
-            {group === "Telegram" && keys.some((k) => k === "telegram.world_topic_id") && (
-              <div className="flex items-center gap-3 border-t border-border px-4 py-3">
-                <span className="text-xs text-muted-foreground">
-                  Для создания топика перейдите в раздел «Города и разделы».
-                </span>
-              </div>
-            )}
           </div>
         ))}
       </div>

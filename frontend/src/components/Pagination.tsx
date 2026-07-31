@@ -1,6 +1,7 @@
 "use client";
 
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { useState } from "react";
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 
 /** Page-size options offered in every paginated table. */
 export const PAGE_SIZES = [20, 50, 100, 200];
@@ -25,6 +26,13 @@ export function Pagination({ page, size, total, onPage, onSize, position = "bott
   const from = total === 0 ? 0 : (page - 1) * size + 1;
   const to = Math.min(page * size, total);
 
+  const [inputVal, setInputVal] = useState("");
+
+  const goToPage = (raw: string) => {
+    const n = parseInt(raw, 10);
+    if (!isNaN(n) && n >= 1 && n <= pages) onPage(n);
+  };
+
   return (
     <div
       className={`flex flex-wrap items-center justify-between gap-3 text-sm ${
@@ -32,7 +40,7 @@ export function Pagination({ page, size, total, onPage, onSize, position = "bott
       }`}
     >
       <div className="flex items-center gap-2 text-muted-foreground">
-        <span>На странице</span>
+        <span className="whitespace-nowrap">На странице</span>
         <select
           className="input w-[92px] cursor-pointer"
           value={size}
@@ -53,6 +61,16 @@ export function Pagination({ page, size, total, onPage, onSize, position = "bott
       </div>
 
       <div className="flex items-center gap-1.5">
+        {/* First page */}
+        <button
+          className="btn-icon"
+          title="Первая страница"
+          disabled={page <= 1}
+          onClick={() => onPage(1)}
+        >
+          <ChevronsLeft className="h-4 w-4" />
+        </button>
+        {/* Previous page */}
         <button
           className="btn-icon"
           title="Предыдущая страница"
@@ -61,9 +79,33 @@ export function Pagination({ page, size, total, onPage, onSize, position = "bott
         >
           <ChevronLeft className="h-4 w-4" />
         </button>
-        <span className="text-muted-foreground">
-          {page} / {pages}
-        </span>
+
+        {/* Direct page input */}
+        <div className="flex items-center gap-1">
+          <input
+            className="input h-8 w-14 text-center text-sm"
+            type="number"
+            min={1}
+            max={pages}
+            placeholder={String(page)}
+            value={inputVal}
+            onChange={(e) => setInputVal(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                goToPage(inputVal);
+                setInputVal("");
+              }
+            }}
+            onBlur={() => {
+              if (inputVal) goToPage(inputVal);
+              setInputVal("");
+            }}
+            title="Перейти к странице"
+          />
+          <span className="whitespace-nowrap text-muted-foreground">/ {pages}</span>
+        </div>
+
+        {/* Next page */}
         <button
           className="btn-icon"
           title="Следующая страница"
@@ -71,6 +113,15 @@ export function Pagination({ page, size, total, onPage, onSize, position = "bott
           onClick={() => onPage(page + 1)}
         >
           <ChevronRight className="h-4 w-4" />
+        </button>
+        {/* Last page */}
+        <button
+          className="btn-icon"
+          title="Последняя страница"
+          disabled={page >= pages}
+          onClick={() => onPage(pages)}
+        >
+          <ChevronsRight className="h-4 w-4" />
         </button>
       </div>
     </div>

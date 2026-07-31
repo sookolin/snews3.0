@@ -3,13 +3,12 @@
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import Link from "next/link";
-import { Eye, Pencil, Tags, Trash2, UserCircle } from "lucide-react";
+import { Eye, Pencil, Tags, Trash2, UserCircle, ShieldOff, Ban } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
 import type { Page, User } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal, Field } from "@/components/Modal";
 import { Checkbox, Select } from "@/components/Controls";
-import { ResizableTable } from "@/components/ResizableTable";
 import { confirm } from "@/components/ConfirmDialog";
 import { useToast } from "@/components/Toast";
 import { ROLE_ORDER, getPreviewRole, setPreviewRole } from "@/lib/roles";
@@ -38,6 +37,7 @@ interface UserForm {
   language: string;
   telegram_id?: number | null;
   yandex_id?: string | null;
+  vk_id?: string | null;
   permissions: { grant?: string[]; deny?: string[] };
   password?: string;
 }
@@ -52,7 +52,7 @@ const FALLBACK_ROLE_LABELS: Record<string, string> = {
 
 const EMPTY: UserForm = {
   email: "", full_name: "", role: "reviewer", is_active: true, language: "ru",
-  telegram_id: null, yandex_id: "", permissions: {}, password: "",
+  telegram_id: null, yandex_id: "", vk_id: "", permissions: {}, password: "",
 };
 
 export default function UsersPage() {
@@ -62,6 +62,8 @@ export default function UsersPage() {
     useSWR<Record<string, string>>("/users/role-labels", fetcher);
   const { data: roleColorsData, mutate: mutateColors } =
     useSWR<Record<string, string>>("/users/role-colors", fetcher);
+  const { data: me } = useSWR<User>("/auth/me", fetcher, { revalidateOnFocus: false });
+  const isSuperAdmin = me?.role === "super_admin";
   const [form, setForm] = useState<UserForm | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Rename-roles dialog: labels + colors together.
@@ -102,8 +104,9 @@ export default function UsersPage() {
     setForm({
       id: u.id, email: u.email, full_name: u.full_name ?? "", role: u.role,
       is_active: u.is_active, language: u.language, telegram_id: u.telegram_id ?? null,
-      yandex_id: (u as User & { yandex_id?: string }).yandex_id ?? "",
-      permissions: ((u as User & { permissions?: object }).permissions ?? {}) as UserForm["permissions"],
+      yandex_id: u.yandex_id ?? "",
+      vk_id: u.vk_id ?? "",
+      permissions: (u.permissions ?? {}) as UserForm["permissions"],
       password: "",
     });
     setError(null);
@@ -142,6 +145,7 @@ export default function UsersPage() {
       language: form.language,
       telegram_id: form.telegram_id ?? null,
       yandex_id: form.yandex_id || null,
+      vk_id: form.vk_id || null,
       permissions: form.permissions ?? {},
     };
     if (form.password) body.password = form.password;
@@ -153,10 +157,33 @@ export default function UsersPage() {
     } catch (e) { setError((e as Error).message); }
   };
 
+  const reset2fa = async (userId: number, email: string) => {
+    if (!(await confirm({ message: `Сбросить 2FA для ${email}? Пользователь должен будет настроить её заново.`, danger: true }))) return;
+    try {
+      await api(`/users/${userId}/reset-2fa`, { method: "POST" });
+      mutate();
+      toast.success("2FA сброшена");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
   const remove = async (id: number) => {
     if (!(await confirm({ message: "Удалить пользователя?", danger: true }))) return;
     await api(`/users/${id}`, { method: "DELETE" });
     mutate();
+  };
+
+  const toggleBan = async (id: number, isBanned: boolean) => {
+    const action = isBanned ? "разблокировать" : "заблокировать";
+    if (!(await confirm({ message: `${isBanned ? "Разблокировать" : "Заблокировать"} этого пользователя?`, danger: !isBanned }))) return;
+    try {
+      await api(`/users/${id}/${isBanned ? "unban" : "ban"}`, { method: "POST" });
+      mutate();
+      toast.success(isBanned ? "Пользователь разблокирован" : "Пользователь заблокирован");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   };
 
   // Group permissions for display.
@@ -195,53 +222,134 @@ export default function UsersPage() {
         </span>
       </div>
 
-      <div className="card overflow-hidden">
-        <div className="table-wrap">
-        <ResizableTable
-          id="users"
-          columns={["Email", "Имя", "Роль", "Telegram", "Яндекс", "2FA", "Активен", "Действия"]}
-        >
-            {data?.items.map((u) => (
-              <tr key={u.id} className="border-t border-border">
-                <td className="px-4 py-3 font-medium">{u.email}</td>
-                <td className="px-4 py-3">{u.full_name ?? "—"}</td>
-                <td className="px-4 py-3">
-                  <span
-                    className="badge"
-                    style={{
-                      backgroundColor: `${ROLE_COLORS[u.role] ?? "#94a3b8"}22`,
-                      color: ROLE_COLORS[u.role] ?? "#94a3b8",
-                      borderColor: `${ROLE_COLORS[u.role] ?? "#94a3b8"}55`,
-                    }}
-                  >
-                    {ROLE_LABELS[u.role] ?? u.role}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {data?.items.map((u) => {
+          const ux = u as User & { photo_url?: string | null; yandex_id?: string; vk_id?: string };
+          return (
+            <div key={u.id} className="card flex flex-col">
+              {/* Header: avatar + identity */}
+              <div className="flex items-start gap-3 p-4">
+                {ux.photo_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={ux.photo_url}
+                    alt={u.full_name || u.email}
+                    className="h-10 w-10 shrink-0 rounded-full object-cover"
+                    width={40}
+                    height={40}
+                  />
+                ) : (
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-600/20 text-sm font-semibold text-sky-600 dark:text-sky-300">
+                    {(u.full_name || u.email || "?").slice(0, 2).toUpperCase()}
                   </span>
-                </td>
-                <td className="px-4 py-3 text-muted-foreground">{u.telegram_id ?? "—"}</td>
-                <td className="px-4 py-3 text-muted-foreground">{(u as User & { yandex_id?: string }).yandex_id || "—"}</td>
-                <td className="px-4 py-3">{u.is_2fa_enabled ? "✓" : "—"}</td>
-                <td className="px-4 py-3">{u.is_active ? "Да" : "Нет"}</td>
-                <td className="px-4 py-3">
-                  <div className="flex justify-center gap-1.5">
-                    <Link
-                      className="btn-icon"
-                      title="Открыть личный кабинет"
-                      href={`/profile?user_id=${u.id}`}
-                    >
-                      <UserCircle className="h-4 w-4" />
-                    </Link>
-                    <button className="btn-icon" title="Редактировать" onClick={() => openEdit(u)}>
-                      <Pencil className="h-4 w-4" />
-                    </button>
-                    <button className="btn-icon-danger" title="Удалить" onClick={() => remove(u.id)}>
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium text-foreground">
+                    {u.full_name || u.email}
                   </div>
-                </td>
-              </tr>
-            ))}
-        </ResizableTable>
-        </div>
+                  {u.full_name && (
+                    <div className="truncate text-xs text-muted-foreground">{u.email}</div>
+                  )}
+                  <div className="mt-1.5">
+                    <span
+                      className="badge"
+                      style={{
+                        backgroundColor: `${ROLE_COLORS[u.role] ?? "#94a3b8"}22`,
+                        color: ROLE_COLORS[u.role] ?? "#94a3b8",
+                        boxShadow: `0 0 0 1px ${ROLE_COLORS[u.role] ?? "#94a3b8"}55 inset`,
+                      }}
+                    >
+                      {ROLE_LABELS[u.role] ?? u.role}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Social accounts row */}
+              <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
+                {u.telegram_id && (
+                  <span className="flex items-center gap-1">
+                    <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0 fill-[#229ED9]" aria-hidden="true">
+                      <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/>
+                    </svg>
+                    {u.telegram_id}
+                  </span>
+                )}
+                {ux.yandex_id && (
+                  <span className="flex items-center gap-1">
+                    <span className="text-[10px] font-bold">Я</span> {ux.yandex_id}
+                  </span>
+                )}
+                {ux.vk_id && (
+                  <span className="flex items-center gap-1">
+                    <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0 fill-[#4680C2]" aria-hidden="true">
+                      <path d="M15.684 0H8.316C1.592 0 0 1.592 0 8.316v7.368C0 22.408 1.592 24 8.316 24h7.368C22.408 24 24 22.408 24 15.684V8.316C24 1.592 22.408 0 15.684 0zm3.692 17.123h-1.744c-.66 0-.862-.523-2.049-1.714-1.033-1.01-1.49-1.135-1.744-1.135-.356 0-.458.102-.458.597v1.563c0 .424-.135.678-1.253.678-1.846 0-3.896-1.118-5.335-3.202C4.624 10.857 4.03 8.57 4.03 8.096c0-.254.102-.491.597-.491h1.744c.444 0 .613.204.786.681.863 2.49 2.303 4.675 2.896 4.675.22 0 .322-.102.322-.66V9.948c-.068-1.186-.695-1.287-.695-1.71 0-.204.17-.407.44-.407h2.743c.373 0 .508.204.508.643v3.473c0 .372.17.508.271.508.22 0 .407-.136.813-.542 1.253-1.405 2.151-3.574 2.151-3.574.119-.254.322-.491.764-.491h1.744c.525 0 .643.27.525.643-.22 1.017-2.354 4.031-2.354 4.031-.186.305-.254.440 0 .779.186.254.796.779 1.203 1.253.745.847 1.32 1.558 1.473 2.049.17.49-.085.744-.576.744z"/>
+                    </svg>
+                    {ux.vk_id}
+                  </span>
+                )}
+                {!u.telegram_id && !ux.yandex_id && !ux.vk_id && (
+                  <span className="italic opacity-60">нет привязок</span>
+                )}
+              </div>
+
+              {/* Status flags */}
+              <div className="flex flex-wrap gap-1.5 px-4 py-2">
+                {u.is_2fa_enabled && (
+                  <span className="badge bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-900">
+                    2FA ✓
+                  </span>
+                )}
+                {u.is_banned && (
+                  <span className="badge bg-rose-50 text-rose-700 ring-rose-200 dark:bg-rose-950/40 dark:text-rose-400 dark:ring-rose-900">
+                    🚫 Заблокирован
+                  </span>
+                )}
+                {!u.is_active && !u.is_banned && (
+                  <span className="badge bg-orange-50 text-orange-600 ring-orange-200 dark:bg-orange-950/40 dark:text-orange-400 dark:ring-orange-900">
+                    Неактивен
+                  </span>
+                )}
+                {u.is_active && !u.is_banned && !u.is_2fa_enabled && (
+                  <span className="text-xs italic text-muted-foreground/60">активен</span>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div className="mt-auto flex items-center gap-1.5 border-t border-border px-4 py-3">
+                <Link
+                  className="btn-icon"
+                  title="Открыть личный кабинет"
+                  href={`/profile?user_id=${u.id}`}
+                >
+                  <UserCircle className="h-4 w-4" />
+                </Link>
+                <button className="btn-icon" title="Редактировать" onClick={() => openEdit(u)}>
+                  <Pencil className="h-4 w-4" />
+                </button>
+                {u.is_2fa_enabled && (
+                  <button
+                    className="btn-icon"
+                    title="Сбросить 2FA"
+                    onClick={() => reset2fa(u.id, u.email)}
+                  >
+                    <ShieldOff className="h-4 w-4" />
+                  </button>
+                )}
+                <button
+                  className={`btn-icon ${u.is_banned ? "text-amber-500 hover:text-amber-700" : "text-rose-500 hover:text-rose-700"}`}
+                  title={u.is_banned ? "Разблокировать аккаунт" : "Заблокировать аккаунт"}
+                  onClick={() => toggleBan(u.id, u.is_banned)}
+                >
+                  <Ban className="h-4 w-4" />
+                </button>
+                <button className="btn-icon-danger ml-auto" title="Удалить" onClick={() => remove(u.id)}>
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <Modal open={!!form} onClose={() => setForm(null)} title={form?.id ? "Редактировать пользователя" : "Новый пользователь"} wide>
@@ -255,28 +363,30 @@ export default function UsersPage() {
             <div className="grid grid-cols-2 gap-4">
               <Field label="Роль" hint="Задаёт базовый набор прав">
                 <Select value={form.role} onChange={(v) => upd({ role: v })}>
-                  {(catalog?.all_roles ?? Object.keys(ROLE_LABELS)).map((r) => (
-                    <option key={r} value={r}>{ROLE_LABELS[r] ?? r}</option>
-                  ))}
+                  {(catalog?.all_roles ?? Object.keys(ROLE_LABELS))
+                    .filter((r) => isSuperAdmin || r !== "super_admin")
+                    .map((r) => (
+                      <option key={r} value={r}>{ROLE_LABELS[r] ?? r}</option>
+                    ))}
                 </Select>
               </Field>
               <Field label={form.id ? "Новый пароль" : "Пароль"} hint={form.id ? "Оставьте пустым, чтобы не менять" : "Минимум 8 символов"}>
                 <input className="input" type="password" value={form.password ?? ""} onChange={(e) => upd({ password: e.target.value })} />
               </Field>
             </div>
-            <div className="grid grid-cols-3 gap-4">
-              <Field label="Telegram ID" hint="Для модерации из бота">
-                <input className="input" type="number" value={form.telegram_id ?? ""} onChange={(e) => upd({ telegram_id: e.target.value ? Number(e.target.value) : null })} />
-              </Field>
-              <Field label="Яндекс ID" hint="Для входа через Яндекс">
-                <input className="input" value={form.yandex_id ?? ""} onChange={(e) => upd({ yandex_id: e.target.value })} />
-              </Field>
-              <Field label="Язык">
-                <Select value={form.language} onChange={(v) => upd({ language: v })}>
-                  <option value="ru">ru</option>
-                  <option value="en">en</option>
-                </Select>
-              </Field>
+            <div className="rounded-lg border border-border px-4 py-3">
+              <div className="mb-3 text-sm font-medium">Привязка аккаунтов</div>
+              <div className="grid grid-cols-3 gap-4">
+                <Field label="Telegram ID" hint="Числовой ID, для DM">
+                  <input className="input" type="number" value={form.telegram_id ?? ""} onChange={(e) => upd({ telegram_id: e.target.value ? Number(e.target.value) : null })} placeholder="123456789" />
+                </Field>
+                <Field label="Яндекс ID" hint="Для входа через Яндекс">
+                  <input className="input" value={form.yandex_id ?? ""} onChange={(e) => upd({ yandex_id: e.target.value })} placeholder="yandex_uid" />
+                </Field>
+                <Field label="VK ID" hint="Для входа через VK">
+                  <input className="input" value={(form as UserForm & { vk_id?: string }).vk_id ?? ""} onChange={(e) => upd({ vk_id: e.target.value } as Partial<UserForm>)} placeholder="vk_uid" />
+                </Field>
+              </div>
             </div>
             <Checkbox checked={form.is_active} onChange={(v) => upd({ is_active: v })} label="Активен" />
 
@@ -374,7 +484,7 @@ export default function UsersPage() {
                     style={{
                       backgroundColor: `${renamingColors[r] ?? DEFAULT_ROLE_COLORS[r] ?? "#94a3b8"}22`,
                       color: renamingColors[r] ?? DEFAULT_ROLE_COLORS[r] ?? "#94a3b8",
-                      borderColor: `${renamingColors[r] ?? DEFAULT_ROLE_COLORS[r] ?? "#94a3b8"}55`,
+                      boxShadow: `0 0 0 1px ${renamingColors[r] ?? DEFAULT_ROLE_COLORS[r] ?? "#94a3b8"}55 inset`,
                     }}
                   >
                     {renaming[r] || FALLBACK_ROLE_LABELS[r] || r}

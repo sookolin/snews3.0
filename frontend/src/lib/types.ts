@@ -114,11 +114,13 @@ export interface User {
   full_name?: string;
   role: string;
   is_active: boolean;
+  is_banned: boolean;
   is_2fa_enabled: boolean;
   language: string;
   telegram_id?: number | null;
   yandex_id?: string | null;
   vk_id?: string | null;
+  photo_url?: string | null;
   last_login_at?: string | null;
   permissions?: { grant?: string[]; deny?: string[] };
 }

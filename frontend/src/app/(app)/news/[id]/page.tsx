@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import useSWR from "swr";
-import { Globe, Save, Send, Trash2, Undo2 } from "lucide-react";
+import { Copy, Globe, Save, Send, Trash2, Undo2 } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
 import type { NewsItem, Page } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
@@ -15,6 +15,7 @@ import { YandexMapPicker } from "@/components/YandexMapPicker";
 import { RichTextEditor } from "@/components/RichTextEditor";
 import { EmojiPickerButton } from "@/components/EmojiPickerButton";
 import { Checkbox, Select } from "@/components/Controls";
+import { Modal, Field } from "@/components/Modal";
 import { useToast } from "@/components/Toast";
 import { confirm } from "@/components/ConfirmDialog";
 
@@ -63,10 +64,15 @@ export default function NewsEditorPage() {
   const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showMap, setShowMap] = useState(false);
+  const [copyModal, setCopyModal] = useState(false);
+  const [copyCity, setCopyCity] = useState<string>("");
+  const [copyPublish, setCopyPublish] = useState(false);
+  const [copying, setCopying] = useState(false);
   const toast = useToast();
 
   const { data: templates } = useSWR<Page<Template>>("/templates?size=100", fetcher);
   const { data: users } = useSWR<Page<UserRef>>("/users?size=200", fetcher);
+  const { data: allCities } = useSWR<Page<City>>("/cities?size=200", fetcher);
   const { data: sources } = useSWR<Page<{ id: number; name: string }>>(
     "/sources?size=200",
     fetcher
@@ -243,6 +249,23 @@ export default function NewsEditorPage() {
       setError((e as Error).message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const copyToCity = async () => {
+    if (!copyCity) return;
+    setCopying(true);
+    try {
+      const copied = await api<{ id: number }>(`/news/${id}/copy-to-city`, {
+        method: "POST",
+        body: JSON.stringify({ city_id: Number(copyCity), publish_immediately: copyPublish }),
+      });
+      setCopyModal(false);
+      toast.success(`Скопировано: новость #${copied.id}`);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setCopying(false);
     }
   };
 
@@ -493,10 +516,44 @@ export default function NewsEditorPage() {
               >
                 <Trash2 className="h-4 w-4" />
               </button>
+              <button
+                className="btn-icon h-9 w-9"
+                title="Копировать в другой город"
+                disabled={saving}
+                onClick={() => { setCopyCity(""); setCopyPublish(false); setCopyModal(true); }}
+              >
+                <Copy className="h-4 w-4" />
+              </button>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Copy-to-city modal */}
+      <Modal open={copyModal} onClose={() => setCopyModal(false)} title="Копировать в другой город">
+        <div className="space-y-4">
+          <Field label="Город назначения">
+            <Select value={copyCity} onChange={setCopyCity}>
+              <option value="">— выберите город —</option>
+              {allCities?.items
+                .filter((c) => c.id !== news.city_id)
+                .map((c) => <option key={c.id} value={c.id}>{c.name}</option>)
+              }
+            </Select>
+          </Field>
+          <Checkbox
+            checked={copyPublish}
+            onChange={setCopyPublish}
+            label="Опубликовать сразу"
+          />
+          <div className="flex justify-end gap-2 pt-2">
+            <button className="btn-outline" onClick={() => setCopyModal(false)}>Отмена</button>
+            <button className="btn-primary" disabled={!copyCity || copying} onClick={copyToCity}>
+              {copying ? "Копирование…" : "Копировать"}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Live Telegram preview (rendered via template) */}
       <div className="lg:sticky lg:top-6 lg:self-start">

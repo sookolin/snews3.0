@@ -89,7 +89,6 @@ async def duplicate_template(
         body=source.body,
         footer=source.footer,
         separator=source.separator,
-        custom_emoji_id=source.custom_emoji_id,
         subscribe_link=source.subscribe_link,
         variables=dict(source.variables or {}),
         disable_web_preview=source.disable_web_preview,
@@ -108,9 +107,23 @@ async def preview_template(
     _: User = Depends(require_permission(Permission.TEMPLATE_MANAGE)),
 ) -> Message:
     """Render the template with sample data for a live preview."""
+    import json as _json
     from shared.services.template_renderer import TemplateRenderer
+    from shared.services.settings_service import SettingsService
 
     template = await CRUDService(session, Template).get_or_404(template_id)
+
+    # Load global tags so the preview reflects what will actually be published.
+    global_tags: list[dict] = []
+    try:
+        raw = await SettingsService(session).get("templates.global_tags", "") or ""
+        if isinstance(raw, str) and raw.strip().startswith("["):
+            global_tags = _json.loads(raw)
+        elif isinstance(raw, list):
+            global_tags = raw
+    except Exception:
+        pass
+
     rendered = TemplateRenderer().render(
         template,
         title="Пример заголовка новости",
@@ -120,5 +133,6 @@ async def preview_template(
         city="Пример города",
         author="Иван Иванов",
         emoji="🔥",
+        global_tags=global_tags,
     )
     return Message(detail=rendered)

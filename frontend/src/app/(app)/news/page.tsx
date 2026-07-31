@@ -342,13 +342,13 @@ export default function NewsPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    {n.is_world_news ? (
+                    {n.is_world_news && !n.city_id ? (
                       <span className="badge bg-cyan-50 text-cyan-700 ring-cyan-200 dark:bg-cyan-950/50 dark:text-cyan-300 dark:ring-cyan-900">
-                        🌍 {n.city_id ? cityName(n.city_id) : "Мировые"}
+                        🌍 Мировые
                       </span>
                     ) : (
                       <span className="badge bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:ring-indigo-900">
-                        {cityName(n.city_id)}
+                        {n.is_world_news ? "🌍 " : ""}{cityName(n.city_id)}
                       </span>
                     )}
                   </td>

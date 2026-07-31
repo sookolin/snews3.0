@@ -2,23 +2,39 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { Menu, X } from "lucide-react";
-import { getToken } from "@/lib/api";
+import { Menu, X, LogOut, Sun, Moon, SunMoon, UserCircle } from "lucide-react";
+import Link from "next/link";
+import { useTheme } from "next-themes";
+import useSWR from "swr";
+import { getToken, clearTokens, fetcher } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
+import { BellButton } from "@/components/BellButton";
 import { useProfileWatcher } from "@/lib/useProfileWatcher";
+import { useRoleLabels } from "@/lib/roles";
 
 const COLLAPSE_KEY = "snews.sidebar.collapsed";
 
+const THEMES = [
+  { value: "dark",  label: "Тёмная тема",    icon: Moon },
+  { value: "light", label: "Светлая тема",   icon: Sun },
+  { value: "dim",   label: "Светлая + меню", icon: SunMoon },
+] as const;
+
 /** Authenticated shell: redirects to /login when no token is present. */
 export function AppShell({ children }: { children: ReactNode }) {
-  const router = useRouter();
+  const router   = useRouter();
   const pathname = usePathname();
-  const [ready, setReady] = useState(false);
+  const [ready, setReady]       = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  // Desktop sidebar: false = full, true = icon-only
   const [collapsed, setCollapsed] = useState(false);
+  const [mounted, setMounted]   = useState(false);
 
-  // Poll for profile changes (role, permissions, is_active) — toast when changed by another user.
+  const { setTheme, theme } = useTheme();
+  const { data: me } = useSWR<{ email: string; full_name?: string; role: string; photo_url?: string | null }>(
+    "/auth/me", fetcher, { revalidateOnFocus: false }
+  );
+  const labels = useRoleLabels();
+
   useProfileWatcher();
 
   useEffect(() => {
@@ -28,6 +44,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setCollapsed(localStorage.getItem(COLLAPSE_KEY) === "1");
+    setMounted(true);
   }, []);
 
   const toggleCollapsed = () =>
@@ -36,8 +53,25 @@ export function AppShell({ children }: { children: ReactNode }) {
       return !v;
     });
 
-  // Close the mobile drawer on navigation.
   useEffect(() => setMenuOpen(false), [pathname]);
+
+  const current = mounted ? THEMES.findIndex((t) => t.value === theme) : -1;
+  const next    = THEMES[(current + 1) % THEMES.length];
+  const NextIcon = next.icon;
+
+  const cycleTheme = () => {
+    const root = document.documentElement;
+    root.classList.add("theme-anim");
+    window.setTimeout(() => root.classList.remove("theme-anim"), 300);
+    setTheme(next.value);
+  };
+
+  const logout = () => {
+    clearTokens();
+    router.push("/login");
+  };
+
+  const initials = (me?.full_name || me?.email || "?").slice(0, 2).toUpperCase();
 
   if (!ready) {
     return (
@@ -49,7 +83,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Desktop sidebar — shrinks to icon-only strip when collapsed. */}
+      {/* Desktop sidebar */}
       <div
         className={`hidden shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out lg:block ${
           collapsed ? "w-16" : "w-60"
@@ -69,12 +103,63 @@ export function AppShell({ children }: { children: ReactNode }) {
       )}
 
       <div className="flex flex-1 flex-col overflow-hidden">
-        {/* Mobile top bar */}
-        <header className="flex h-14 items-center gap-3 border-b border-border bg-card px-4 lg:hidden">
-          <button className="btn-icon" onClick={() => setMenuOpen((v) => !v)} aria-label="Меню">
+        {/* Top bar */}
+        <header className="flex h-14 items-center gap-2 border-b border-border bg-card px-4">
+          {/* Hamburger — mobile only */}
+          <button className="btn-icon lg:hidden" onClick={() => setMenuOpen((v) => !v)} aria-label="Меню">
             {menuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
           </button>
-          <span className="text-base font-semibold tracking-wide">SNEWS</span>
+          <span className="text-base font-semibold tracking-wide lg:hidden">SNEWS</span>
+
+          <div className="flex-1" />
+
+          {/* Notifications */}
+          <BellButton />
+
+          {/* Theme toggle */}
+          {mounted && (
+            <button
+              className="btn-icon"
+              title={next.label}
+              aria-label={next.label}
+              onClick={cycleTheme}
+            >
+              <NextIcon className="h-4 w-4" />
+            </button>
+          )}
+
+          {/* Profile link */}
+          <Link
+            href="/profile"
+            className="btn-icon flex items-center gap-1.5"
+            title={`${me?.full_name || me?.email || "Профиль"} · ${labels[me?.role ?? ""] ?? me?.role ?? ""}`}
+            aria-label="Личный кабинет"
+          >
+            {me?.photo_url ? (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img
+                src={me.photo_url}
+                alt={me.full_name || me.email || "Аватар"}
+                className="h-7 w-7 rounded-full object-cover ring-1 ring-sky-600/30"
+                width={28}
+                height={28}
+              />
+            ) : (
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-sky-600/20 text-xs font-semibold text-sky-600 dark:text-sky-300">
+                {initials}
+              </span>
+            )}
+          </Link>
+
+          {/* Logout */}
+          <button
+            className="btn-icon"
+            title="Выйти"
+            aria-label="Выйти"
+            onClick={logout}
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
         </header>
 
         <main className="flex-1 overflow-y-auto p-4 sm:p-6">{children}</main>

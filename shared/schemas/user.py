@@ -45,11 +45,13 @@ class UserOut(ORMModel):
     full_name: str | None
     role: UserRole
     is_active: bool
+    is_banned: bool
     is_2fa_enabled: bool
     language: str
     telegram_id: int | None
     yandex_id: str | None
     vk_id: str | None
+    photo_url: str | None
     permissions: dict
     last_login_at: datetime | None
     created_at: datetime
