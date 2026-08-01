@@ -231,6 +231,18 @@ class IngestionPipeline:
         linked_cities = [c for c in source.cities if c.is_active]
         is_world = _looks_like_world_news(item.title, item.text, self._world_markers)
 
+        # A source bound only to cities that are all inactive must produce
+        # nothing: the operator deliberately switched those cities off, so we do
+        # not fall back to keyword matching or the world bucket for it.
+        if source.cities and not linked_cities:
+            report.unmatched += 1
+            return []
+
+        # Cloning the same item into several linked cities requires per-city
+        # dedup, otherwise the global content-hash check would treat the second
+        # city's copy as a duplicate of the first and silently drop it.
+        scope_city = len(linked_cities) > 1
+
         if linked_cities:
             # All explicitly linked cities receive a copy of the item.
             # keyword matching is skipped — the editorial binding is authoritative.
@@ -261,7 +273,8 @@ class IngestionPipeline:
         created_ids: list[int] = []
         for city in target_cities:
             nid = await self._create_for_city(
-                source, item, city, dedup, match_score, matched_keywords, is_world, report
+                source, item, city, dedup, match_score, matched_keywords,
+                is_world, report, scope_city=scope_city,
             )
             if nid is not None:
                 created_ids.append(nid)
@@ -277,14 +290,19 @@ class IngestionPipeline:
         matched_keywords: list[str],
         is_world: bool,
         report: IngestReport,
+        scope_city: bool = False,
     ) -> int | None:
         """Dedup-check, persist and AI-process a single News row for *city*."""
-        # 1) Dedup (per-city: the same story may already exist for this city)
+        # 1) Dedup. When the item is cloned across several linked cities the
+        # check is scoped to this city so sibling clones are not seen as
+        # duplicates of one another; otherwise it stays global to catch
+        # cross-source duplicates.
         dedup_result = await dedup.check(
             text=item.text,
             title=item.title,
             url=item.url,
             city_id=city.id,
+            scope_city=scope_city,
         )
         if dedup_result.is_duplicate:
             report.duplicates += 1

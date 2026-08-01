@@ -66,22 +66,37 @@ class DedupService:
         title: str | None = None,
         url: str | None = None,
         embedding: list[float] | None = None,
-        city_id: int | None = None,  # noqa: ARG002 - kept for API compatibility
+        city_id: int | None = None,
+        scope_city: bool = False,
     ) -> DedupResult:
         """Return whether the item duplicates an existing one.
 
-        ``city_id`` is accepted for backwards compatibility but intentionally
-        not used to narrow the comparison: duplicates frequently arrive from
-        different sources and may be assigned to different cities.
+        By default the comparison is global: the same story is often picked up
+        by several outlets and matched to different cities, so a global check
+        catches cross-source duplicates.
+
+        When ``scope_city`` is ``True`` the comparison is restricted to
+        ``city_id``. This is used when one source is editorially bound to
+        several cities and the same item is intentionally cloned into each of
+        them (e.g. a regional agency covering the whole oblast): those copies
+        must not dedup against one another, only against prior items of the
+        *same* city.
         """
         chash = content_hash((title or "") + " " + text)
         shash = compute_simhash((title or "") + " " + text)
 
         since = datetime.now(timezone.utc) - timedelta(days=self.config.lookback_days)
 
+        # When scoping to a city, every comparison is narrowed to that city so
+        # multi-city clones of the same source item stay independent.
+        def _scoped(stmt):  # type: ignore[no-untyped-def]
+            if scope_city and city_id is not None:
+                return stmt.where(News.city_id == city_id)
+            return stmt
+
         # 1) Exact hash match (fast, indexed).
         exact = await self.session.scalar(
-            select(News.id).where(News.content_hash == chash).limit(1)
+            _scoped(select(News.id).where(News.content_hash == chash)).limit(1)
         )
         if exact is not None:
             return DedupResult(True, exact, "content_hash", chash, shash)
@@ -89,17 +104,16 @@ class DedupService:
         # 2) Exact URL match.
         if url:
             by_url = await self.session.scalar(
-                select(News.id).where(News.original_url == url).limit(1)
+                _scoped(select(News.id).where(News.original_url == url)).limit(1)
             )
             if by_url is not None:
                 return DedupResult(True, by_url, "url", chash, shash)
 
         # 3) Fuzzy signals against recent items.
         #
-        # Deliberately NOT restricted to one city: the same story is often picked
-        # up by several outlets and may be matched to different cities, so the
-        # comparison must be global to catch cross-source duplicates.
-        stmt = (
+        # Global by default (see docstring); narrowed to the city only when
+        # ``scope_city`` is set for intentional multi-city clones.
+        stmt = _scoped(
             select(News)
             .where(News.created_at >= since)
             .order_by(News.created_at.desc())
