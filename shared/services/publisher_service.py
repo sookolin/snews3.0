@@ -59,8 +59,17 @@ class PublisherService:
         template: Template | None = None
         if news.template_id:
             template = await self.session.get(Template, news.template_id)
-        if template is None and news.city and news.city.template_id:
-            template = await self.session.get(Template, news.city.template_id)
+        # Fall back to the city's own template (bound at city creation). Load the
+        # city by id if the relationship is not populated, so this works even
+        # when the caller did not eager-load ``news.city``.
+        if template is None and news.city_id:
+            city = news.city
+            if city is None:
+                from shared.models.city import City
+
+                city = await self.session.get(City, news.city_id)
+            if city and city.template_id:
+                template = await self.session.get(Template, city.template_id)
         if template is None:
             template = await self.session.scalar(
                 select(Template)

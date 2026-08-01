@@ -360,7 +360,7 @@ async def render_news_preview(
     from shared.services.template_renderer import TemplateRenderer
 
     news = await _get_news(session, news_id)
-    template = await _resolve_preview_template(session, payload.template_id, news.template_id)
+    template = await _resolve_template_for_news(session, news, payload.template_id)
 
     hide_source = (
         payload.hide_source if payload.hide_source is not None else news.hide_source
@@ -406,17 +406,42 @@ async def render_news_preview(
     return Message(detail=rendered)
 
 
-async def _resolve_preview_template(session, requested_id, news_template_id):  # type: ignore[no-untyped-def]
-    """Pick a template: explicit → news default → global default → any."""
+async def _resolve_template_for_news(session, news, requested_id=None):  # type: ignore[no-untyped-def]
+    """Pick the effective template for a news item, matching the publisher.
+
+    Order of precedence:
+      1. ``requested_id`` — an explicit choice from the editor dropdown;
+      2. ``news.template_id`` — a template saved on the news itself;
+      3. the news city's ``template_id`` — the template bound when the city was
+         created (this is what "По умолчанию" must mean for a city's news);
+      4. the global default template;
+      5. any template at all.
+
+    Previously the preview/editor endpoints skipped step 3 and jumped straight
+    to the global default, so a city's own template was ignored in the editor
+    even though the real publisher used it — the preview did not match the post.
+    """
     from sqlalchemy import select as _select
 
+    from shared.models.city import City
     from shared.models.template import Template
 
-    for candidate in (requested_id, news_template_id):
+    # 1 + 2: explicit request, then a template pinned on the news.
+    for candidate in (requested_id, getattr(news, "template_id", None)):
         if candidate:
             tpl = await session.get(Template, candidate)
             if tpl is not None:
                 return tpl
+
+    # 3: the city's own template (bound at city creation).
+    if getattr(news, "city_id", None):
+        city = await session.get(City, news.city_id)
+        if city and city.template_id:
+            tpl = await session.get(Template, city.template_id)
+            if tpl is not None:
+                return tpl
+
+    # 4: global default, then 5: any template.
     tpl = await session.scalar(
         _select(Template).where(Template.is_default.is_(True)).limit(1)
     )
@@ -436,23 +461,10 @@ async def render_news(
 ) -> Message:
     """Render the news through a template (for the live editor preview)."""
     from shared.models.source import Source
-    from shared.models.template import Template
     from shared.services.template_renderer import TemplateRenderer
 
     news = await _get_news(session, news_id)
-    template: Template | None = None
-    if template_id:
-        template = await session.get(Template, template_id)
-    if template is None and news.template_id:
-        template = await session.get(Template, news.template_id)
-    if template is None:
-        from sqlalchemy import select as _select
-
-        template = await session.scalar(
-            _select(Template).where(Template.is_default.is_(True)).limit(1)
-        )
-    if template is None:
-        raise NotFoundError("Нет доступного шаблона")
+    template = await _resolve_template_for_news(session, news, template_id)
 
     source_name = ""
     if news.source_id:
