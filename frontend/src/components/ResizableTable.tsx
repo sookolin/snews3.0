@@ -35,6 +35,12 @@ interface Props {
   columns: ReactNode[];
   /** Column indexes whose header stays left-aligned (e.g. checkbox cells). */
   rawColumns?: number[];
+  /**
+   * Initial pixel widths per column index, applied when the user has not
+   * manually resized that column yet (no persisted value in localStorage).
+   * Lets a page pin narrow columns like the checkbox/ID cells.
+   */
+  defaultWidths?: Record<number, number>;
   children: ReactNode;
 }
 
@@ -43,13 +49,25 @@ interface Props {
  * Rows are supplied by the caller as ``<tr>`` children, so each page keeps
  * full control over cell rendering.
  */
-export function ResizableTable({ id, columns, rawColumns = [], children }: Props) {
+export function ResizableTable({
+  id,
+  columns,
+  rawColumns = [],
+  defaultWidths = {},
+  children,
+}: Props) {
   const [widths, setWidths] = useState<Record<number, number>>({});
   const drag = useRef<{ index: number; startX: number; startW: number } | null>(null);
   const headRefs = useRef<(HTMLTableCellElement | null)[]>([]);
 
   // Read persisted widths after mount so server and client markup agree.
-  useEffect(() => setWidths(load(id)), [id]);
+  // Page-provided defaults are the base; any column the user has resized
+  // (persisted in localStorage) overrides its default.
+  useEffect(
+    () => setWidths({ ...defaultWidths, ...load(id) }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [id]
+  );
 
   const onMove = useCallback(
     (e: MouseEvent) => {

@@ -316,6 +316,7 @@ export default function NewsPage() {
           <ResizableTable
             id="news"
             rawColumns={[0, 1, 8]}
+            defaultWidths={{ 0: 50, 1: 50 }}
             columns={[
               <Checkbox key="all" checked={allSelected} onChange={() => toggleAll()} />,
               "ID",
