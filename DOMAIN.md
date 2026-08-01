@@ -4,15 +4,15 @@
 
 | Файл | Переменная / строка | Подставить |
 |------|---------------------|------------|
-| `.env` | `BACKEND_CORS_ORIGINS` | `https://snews.example.com` |
-| `.env` | `ADMIN_PANEL_URL` | `https://snews.example.com` |
-| `.env` | `TELEGRAM_WEBHOOK_URL` | `https://snews.example.com/api/v1/bot/webhook` |
+| `.env` | `BACKEND_CORS_ORIGINS` | `https://admin.sonews.ru` |
+| `.env` | `ADMIN_PANEL_URL` | `https://admin.sonews.ru` |
+| `.env` | `TELEGRAM_WEBHOOK_URL` | `https://admin.sonews.ru/api/v1/bot/webhook` |
 | `.env` | `APP_ENV` | `production` |
 | `.env` | `DEBUG` | `false` |
-| `docker/nginx/nginx.conf` | `server_name` (HTTPS-блок) | ваш домен, например `snews.example.com` |
-| `docker/nginx/nginx.conf` | `ssl_certificate` | `/etc/letsencrypt/live/snews.example.com/fullchain.pem` |
-| `docker/nginx/nginx.conf` | `ssl_certificate_key` | `/etc/letsencrypt/live/snews.example.com/privkey.pem` |
-| `docker-compose.yml` (frontend `args` / `environment`) | `NEXT_PUBLIC_API_URL` | `https://snews.example.com` |
+| `docker/nginx/nginx.conf` | `server_name` (HTTPS-блок) | ваш домен, например `admin.sonews.ru` |
+| `docker/nginx/nginx.conf` | `ssl_certificate` | `/etc/letsencrypt/live/admin.sonews.ru/fullchain.pem` |
+| `docker/nginx/nginx.conf` | `ssl_certificate_key` | `/etc/letsencrypt/live/admin.sonews.ru/privkey.pem` |
+| `docker-compose.yml` (frontend `args` / `environment`) | `NEXT_PUBLIC_API_URL` | `https://admin.sonews.ru` |
 
 ---
 
@@ -21,12 +21,12 @@
 В панели вашего DNS-провайдера добавьте A-запись:
 
 ```
-snews.example.com  →  <публичный IP вашего сервера>
+admin.sonews.ru  →  <публичный IP вашего сервера>
 ```
 
 Проверка (после TTL, обычно 5–15 мин):
 ```bash
-nslookup snews.example.com
+nslookup admin.sonews.ru
 ```
 
 ---
@@ -60,12 +60,12 @@ docker run --rm \
   -v ./docker/nginx/certbot/www:/var/www/certbot \
   certbot/certbot certonly --webroot \
   --webroot-path /var/www/certbot \
-  -d snews.example.com \
-  --email admin@example.com \
+  -d admin.sonews.ru \
+  --email sookolin@vk.com \
   --agree-tos --non-interactive
 ```
 
-После успеха сертификат будет в `docker/nginx/certbot/conf/live/snews.example.com/`.
+После успеха сертификат будет в `docker/nginx/certbot/conf/live/admin.sonews.ru/`.
 
 ---
 
@@ -78,7 +78,7 @@ docker run --rm \
 ```nginx
 server {
     listen 80;
-    server_name snews.example.com;
+    server_name admin.sonews.ru;
     # certbot webroot challenge
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
@@ -91,10 +91,10 @@ server {
 
 server {
     listen 443 ssl http2;
-    server_name snews.example.com;
+    server_name admin.sonews.ru;
 
-    ssl_certificate     /etc/letsencrypt/live/snews.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/snews.example.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/admin.sonews.ru/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/admin.sonews.ru/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers on;
 
@@ -122,9 +122,9 @@ docker compose exec nginx nginx -s reload
 APP_ENV=production
 DEBUG=false
 SECRET_KEY=<случайная строка 32+ символов>
-BACKEND_CORS_ORIGINS=https://snews.example.com
-ADMIN_PANEL_URL=https://snews.example.com
-TELEGRAM_WEBHOOK_URL=https://snews.example.com/api/v1/bot/webhook
+BACKEND_CORS_ORIGINS=https://admin.sonews.ru
+ADMIN_PANEL_URL=https://admin.sonews.ru
+TELEGRAM_WEBHOOK_URL=https://admin.sonews.ru/api/v1/bot/webhook
 ```
 
 После изменения `.env` нужно пересобрать только frontend
@@ -143,7 +143,7 @@ docker compose up -d
 
 ```bash
 # Зарегистрировать webhook
-curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://snews.example.com/api/v1/bot/webhook"
+curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://admin.sonews.ru/api/v1/bot/webhook"
 # Проверить
 curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
 ```
