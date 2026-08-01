@@ -146,8 +146,14 @@ class PushService:
             if 200 <= status < 300:
                 sent += 1
         if len(alive) != len(devices):
+            # Prune expired subscriptions with a flush, not a commit: this method
+            # runs inside request handlers that own the transaction boundary
+            # (they commit once at the end). Committing here would prematurely
+            # persist unrelated in-flight writes and break their atomicity. The
+            # worker ``broadcast`` path runs inside ``session_scope`` which
+            # commits on exit, so a flush is durable there too.
             user.push_subscriptions = alive
-            await self.session.commit()
+            await self.session.flush()
         return sent
 
     async def notify(self, user: User, event: str, title: str, body: str, url: str = "/") -> int:

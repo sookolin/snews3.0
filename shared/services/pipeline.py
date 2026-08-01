@@ -65,7 +65,7 @@ _REGION_SYNONYMS: dict[str, tuple[str, ...]] = {
     "московская область": (
         "московская область", "московской области", "подмосковье",
         "подмосковью", "подмосковный", "подмосковная", "подмосковные",
-        " мо ", "мособл",
+        "мособл",
     ),
 }
 
@@ -102,8 +102,13 @@ def _regions_in_text(text: str | None) -> set[str]:
 
 
 def _mentions_region(title: str | None, text: str, regions: set[str]) -> bool:
-    """True if the text mentions any of the given regions (or their synonyms)."""
-    blob = f" {title or ''} {text[:800]} ".lower()
+    """True if the text mentions any of the given regions (or their synonyms).
+
+    Scans the title and a generous leading slice of the body: a genuine
+    region-wide item names its region early, and scanning further would only
+    add noise while still bounding the work on very long articles.
+    """
+    blob = f" {title or ''} {text[:2000]} ".lower()
     for region in regions:
         for syn in _region_synonyms(region):
             if syn in blob:
