@@ -531,3 +531,70 @@ def send_daily_digests() -> dict:  # type: ignore[no-untyped-def]
         return {"sent": sent}
 
     return run_async(_run())
+
+
+async def _publish_weather_for_city(session, city) -> int:
+    """Fetch the forecast and post it to every active channel of *city*."""
+    from shared.models.channel import Channel
+    from shared.plugins.publishers import PublishRequest, publisher_registry
+    from shared.services import weather_service
+
+    lat, lon = city.weather_lat, city.weather_lon
+    if lat is None or lon is None:
+        coords = await weather_service._geocode(city.name)
+        if coords is None:
+            return 0
+        lat, lon = coords
+        city.weather_lat, city.weather_lon = lat, lon
+        await session.flush()
+
+    forecast = await weather_service.fetch_forecast(lat, lon)
+    if forecast is None:
+        return 0
+    text = weather_service.format_post(city.name, forecast)
+
+    channels = (
+        await session.scalars(
+            select(Channel).where(Channel.city_id == city.id, Channel.is_active.is_(True))
+        )
+    ).all()
+    publisher_cls = publisher_registry.get("telegram")
+    sent = 0
+    for channel in channels:
+        try:
+            result = await publisher_cls(channel).publish(PublishRequest(text=text))
+            if result.success:
+                sent += 1
+        except Exception as exc:  # noqa: BLE001
+            log.warning("weather_publish_failed", city=city.id, channel=channel.id, error=str(exc))
+    return sent
+
+
+@celery_app.task(name="workers.tasks.publish_city_weather")
+def publish_city_weather() -> dict:
+    """Publish the daily weather post to cities whose configured time is now."""
+
+    async def _run() -> dict:
+        from shared.models.city import City
+        from shared.services.settings_service import SettingsService
+
+        published = 0
+        async with session_scope() as session:
+            tz_offset = int(await SettingsService(session).get("ui.timezone_offset_hours", 3))
+            now_local = datetime.now(timezone.utc) + timedelta(hours=tz_offset)
+            hhmm = now_local.strftime("%H:%M")
+            cities = (
+                await session.scalars(
+                    select(City).where(
+                        City.is_active.is_(True),
+                        City.weather_enabled.is_(True),
+                        City.weather_time == hhmm,
+                    )
+                )
+            ).all()
+            for city in cities:
+                published += await _publish_weather_for_city(session, city)
+            await session.commit()
+        return {"weather_posts": published}
+
+    return run_async(_run())

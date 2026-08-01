@@ -238,17 +238,24 @@ class IngestionPipeline:
             report.unmatched += 1
             return []
 
-        # Cloning the same item into several linked cities requires per-city
-        # dedup, otherwise the global content-hash check would treat the second
-        # city's copy as a duplicate of the first and silently drop it.
-        scope_city = len(linked_cities) > 1
-
         if linked_cities:
-            # All explicitly linked cities receive a copy of the item.
-            # keyword matching is skipped — the editorial binding is authoritative.
-            target_cities: list[City] = linked_cities
-            match_score = 1.0
-            matched_keywords: list[str] = []
+            # Editorial binding is authoritative. But if the text clearly names
+            # ONE of the linked cities (keyword match), the item is about that
+            # city specifically → target only it. Otherwise it is general
+            # regional news → target ALL linked cities as a single News.
+            specific = matcher.match(item.text, item.title)
+            if (
+                specific.city
+                and specific.score >= min_score
+                and specific.city.id in {c.id for c in linked_cities}
+            ):
+                target_cities: list[City] = [specific.city]
+                match_score = specific.score
+                matched_keywords: list[str] = specific.matched_keywords or []
+            else:
+                target_cities = linked_cities
+                match_score = 1.0
+                matched_keywords = []
         else:
             # No city binding — fall back to keyword matching.
             match = matcher.match(item.text, item.title)
@@ -257,8 +264,13 @@ class IngestionPipeline:
                 match_score = match.score
                 matched_keywords = match.matched_keywords or []
             else:
-                # Nothing matched → world/unmatched bucket.
-                if not self._world_news_enabled:
+                # Nothing matched a monitored city. Only genuinely world/federal
+                # stories (per the world markers) are kept — everything else is
+                # not relevant to any configured city and is DROPPED. This stops
+                # unrelated local news of other regions (e.g. Санкт-Петербург)
+                # from leaking into the world bucket just because it matched no
+                # monitored city.
+                if not (self._world_news_enabled and is_world):
                     report.unmatched += 1
                     return []
                 bucket = await self._world_bucket()
@@ -270,39 +282,34 @@ class IngestionPipeline:
                 matched_keywords = []
                 is_world = True
 
-        created_ids: list[int] = []
-        for city in target_cities:
-            nid = await self._create_for_city(
-                source, item, city, dedup, match_score, matched_keywords,
-                is_world, report, scope_city=scope_city,
-            )
-            if nid is not None:
-                created_ids.append(nid)
-        return created_ids
+        # One News per item — not one per city. The primary city owns the
+        # moderation topic; ``target_cities`` holds every channel-city it will
+        # be published to via a single action.
+        nid = await self._create_news(
+            source, item, target_cities, dedup, match_score, matched_keywords,
+            is_world, report,
+        )
+        return [nid] if nid is not None else []
 
-    async def _create_for_city(
+    async def _create_news(
         self,
         source: Source,
         item: ParsedItem,
-        city: City,
+        target_cities: list[City],
         dedup: DedupService,
         match_score: float,
         matched_keywords: list[str],
         is_world: bool,
         report: IngestReport,
-        scope_city: bool = False,
     ) -> int | None:
-        """Dedup-check, persist and AI-process a single News row for *city*."""
-        # 1) Dedup. When the item is cloned across several linked cities the
-        # check is scoped to this city so sibling clones are not seen as
-        # duplicates of one another; otherwise it stays global to catch
-        # cross-source duplicates.
+        """Dedup-check, persist and AI-process ONE News for all target cities."""
+        primary = target_cities[0]
+        # 1) Dedup — global (one News means no sibling-clone collision anymore).
         dedup_result = await dedup.check(
             text=item.text,
             title=item.title,
             url=item.url,
-            city_id=city.id,
-            scope_city=scope_city,
+            city_id=primary.id,
         )
         if dedup_result.is_duplicate:
             report.duplicates += 1
@@ -311,7 +318,7 @@ class IngestionPipeline:
 
         # Detect a follow-up: strongly similar to a recent published item but
         # not an outright duplicate → publish as a reply to that message.
-        follow_up_of = await self._find_follow_up_target(item, city.id)
+        follow_up_of = await self._find_follow_up_target(item, primary.id)
 
         # 2) Persist raw news
         # When the source provides no publication timestamp (website parsers,
@@ -325,7 +332,7 @@ class IngestionPipeline:
             original_url=item.url,
             status=NewsStatus.PROCESSING,
             origin=NewsOrigin.PARSER,
-            city_id=city.id,
+            city_id=primary.id,
             source_id=source.id,
             content_hash=dedup_result.content_hash,
             simhash=dedup_result.simhash,
@@ -335,6 +342,9 @@ class IngestionPipeline:
             is_world_news=is_world,
             reply_to_news_id=follow_up_of,
         )
+        # Record every channel-city this item goes to. Always includes the
+        # primary; extra cities make it a multi-channel post.
+        news.target_cities = list(target_cities)
         self.session.add(news)
         await self.session.flush()
 

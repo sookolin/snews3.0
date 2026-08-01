@@ -23,6 +23,11 @@ class CityBase(BaseModel):
     template_id: int | None = None
     kind: Literal["city", "other"] = "city"
     is_world_bucket: bool = False
+    # Daily weather post configuration.
+    weather_enabled: bool = False
+    weather_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    weather_lat: float | None = None
+    weather_lon: float | None = None
 
 
 class CityCreate(CityBase):
@@ -43,6 +48,10 @@ class CityUpdate(BaseModel):
     telegram_topic_id: int | None = None
     kind: Literal["city", "other"] | None = None
     is_world_bucket: bool | None = None
+    weather_enabled: bool | None = None
+    weather_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    weather_lat: float | None = None
+    weather_lon: float | None = None
 
 
 class CityOut(ORMModel):
@@ -61,4 +70,8 @@ class CityOut(ORMModel):
     template_id: int | None
     kind: str = "city"
     is_world_bucket: bool = False
+    weather_enabled: bool = False
+    weather_time: str | None = None
+    weather_lat: float | None = None
+    weather_lon: float | None = None
     created_at: datetime

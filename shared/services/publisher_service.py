@@ -97,15 +97,31 @@ class PublisherService:
             )
 
         # Ensure relationships are loaded.
-        await self.session.refresh(news, attribute_names=["media", "city"])
+        await self.session.refresh(news, attribute_names=["media", "city", "target_cities"])
 
+        # Publish to the channels of EVERY target city (multi-channel post),
+        # falling back to just the primary city for legacy items with no
+        # explicit targets.
+        target_city_ids = [c.id for c in (news.target_cities or [])] or [news.city_id]
         channels = (
             await self.session.scalars(
-                select(Channel).where(Channel.city_id == news.city_id, Channel.is_active.is_(True))
+                select(Channel).where(
+                    Channel.city_id.in_(target_city_ids), Channel.is_active.is_(True)
+                )
             )
         ).all()
         if not channels:
-            raise PublishError("У города нет активных каналов")
+            raise PublishError("У целевых городов нет активных каналов")
+
+        # Map city_id → City for per-channel template + {city} placeholder.
+        from shared.models.city import City as _City
+
+        cities_by_id = {
+            c.id: c
+            for c in (
+                await self.session.scalars(select(_City).where(_City.id.in_(target_city_ids)))
+            ).all()
+        }
 
         # Follow-up threading: reply to the parent news' message per chat.
         reply_map: dict[str, int] = {}
@@ -162,11 +178,15 @@ class PublisherService:
         errors: list[str] = []
 
         for channel in channels:
-            template = (
-                await self.session.get(Template, channel.template_id)
-                if channel.template_id
-                else await self._resolve_template(news)
-            )
+            channel_city = cities_by_id.get(channel.city_id)
+            # Template precedence per channel: channel override → channel city's
+            # own template → news template → global default. This is what makes
+            # each city's post use the template bound to that city.
+            template = None
+            if channel.template_id:
+                template = await self.session.get(Template, channel.template_id)
+            if template is None and channel_city and channel_city.template_id:
+                template = await self.session.get(Template, channel_city.template_id)
             if template is None:
                 template = await self._resolve_template(news)
 
@@ -176,7 +196,7 @@ class PublisherService:
                 text=news.text or news.original_text,
                 source=source_name,
                 source_url=source_url,
-                city=news.city.name if news.city else "",
+                city=channel_city.name if channel_city else (news.city.name if news.city else ""),
                 author=author_name,
                 emoji=news.emoji or "",
                 published_at=datetime.now(timezone.utc),

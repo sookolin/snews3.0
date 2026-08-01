@@ -20,6 +20,7 @@ from shared.schemas.news import (
     NewsOut,
     NewsUpdate,
     NewsVersionOut,
+    _target_ids_from_orm,
 )
 from shared.services.audit_service import AuditService
 from shared.services.version_service import VersionService
@@ -79,7 +80,12 @@ async def list_news(
             stmt.order_by(News.created_at.desc()).offset(params.offset).limit(params.size)
         )
     ).all()
-    return Page.create([NewsListItem.model_validate(n) for n in rows], total, params)
+    items = []
+    for n in rows:
+        item = NewsListItem.model_validate(n)
+        item.target_city_ids = _target_ids_from_orm(n)
+        items.append(item)
+    return Page.create(items, total, params)
 
 
 async def _get_news(session: DBSession, news_id: int) -> News:
@@ -88,6 +94,32 @@ async def _get_news(session: DBSession, news_id: int) -> News:
         raise NotFoundError(f"News {news_id} not found")
     await session.refresh(news)
     return news
+
+
+def _news_out(news: News) -> NewsOut:
+    """Serialize a News row including its flat ``target_city_ids``."""
+    out = NewsOut.model_validate(news)
+    out.target_city_ids = _target_ids_from_orm(news)
+    return out
+
+
+async def _set_target_cities(session, news_id: int, city_ids: list[int]) -> None:
+    """Replace a news item's target cities via the association table."""
+    from sqlalchemy import delete, insert
+
+    from shared.models.city import City
+    from shared.models.news import news_target_cities
+
+    await session.execute(
+        delete(news_target_cities).where(news_target_cities.c.news_id == news_id)
+    )
+    if city_ids:
+        valid = (await session.scalars(select(City.id).where(City.id.in_(city_ids)))).all()
+        if valid:
+            await session.execute(
+                insert(news_target_cities),
+                [{"news_id": news_id, "city_id": cid} for cid in valid],
+            )
 
 
 @router.post("", response_model=NewsOut, status_code=201)
@@ -114,7 +146,7 @@ async def create_news(
     session.add(news)
     await session.flush()
     await session.refresh(news)
-    return NewsOut.model_validate(news)
+    return _news_out(news)
 
 
 @router.get("/{news_id}", response_model=NewsOut)
@@ -124,7 +156,7 @@ async def get_news(
     _: User = Depends(require_permission(Permission.NEWS_VIEW)),
 ) -> NewsOut:
     news = await _get_news(session, news_id)
-    return NewsOut.model_validate(news)
+    return _news_out(news)
 
 
 @router.patch("/{news_id}", response_model=NewsOut)
@@ -142,6 +174,8 @@ async def update_news(
     await VersionService(session).snapshot(news, edited_by=actor.id, comment=payload.edit_comment)
 
     data = payload.model_dump(exclude_unset=True, exclude={"edit_comment"})
+    # target_city_ids is stored via the association table, not as a column.
+    target_ids = data.pop("target_city_ids", None)
     for key, value in data.items():
         setattr(news, key, value)
 
@@ -151,6 +185,10 @@ async def update_news(
     if news.published_message_ids and content_keys & set(data):
         news.is_edited = True
     await session.flush()
+
+    if target_ids is not None:
+        await _set_target_cities(session, news_id, target_ids)
+        await session.refresh(news, attribute_names=["target_cities"])
 
     await AuditService(session).log(
         "news.update",
@@ -176,7 +214,7 @@ async def update_news(
             keep_buttons=True,
         )
     await session.refresh(news)
-    return NewsOut.model_validate(news)
+    return _news_out(news)
 
 
 @router.get("/{news_id}/versions", response_model=list[NewsVersionOut])
@@ -198,7 +236,7 @@ async def restore_version(
 ) -> NewsOut:
     news = await VersionService(session).restore(news_id, version, edited_by=actor.id)
     await session.refresh(news)
-    return NewsOut.model_validate(news)
+    return _news_out(news)
 
 
 @router.post("/{news_id}/approve", response_model=NewsOut)
@@ -248,7 +286,7 @@ async def approve_news(
         news, status_line=f"✅ Одобрено · {who}{queued}", keep_buttons=True
     )
     await session.refresh(news)
-    return NewsOut.model_validate(news)
+    return _news_out(news)
 
 
 @router.post("/{news_id}/reject", response_model=NewsOut)
@@ -281,7 +319,7 @@ async def reject_news(
         news, status_line=f"❌ Отклонено · {who}", keep_buttons=True
     )
     await session.refresh(news)
-    return NewsOut.model_validate(news)
+    return _news_out(news)
 
 
 class BulkDeleteRequest(BaseModel):
@@ -522,7 +560,7 @@ async def regenerate_news(
         raise ExternalServiceError(f"AI: {exc}") from exc
     await session.flush()
     await session.refresh(news)
-    return NewsOut.model_validate(news)
+    return _news_out(news)
 
 
 @router.post("/{news_id}/publish-all-cities", response_model=Message)
@@ -590,7 +628,7 @@ async def unpublish_news(
         **meta,
     )
     await session.refresh(news)
-    return NewsOut.model_validate(news)
+    return _news_out(news)
 
 
 @router.post("/{news_id}/send-to-moderation", response_model=Message)
@@ -653,7 +691,7 @@ async def publish_now(
         **meta,
     )
     await session.refresh(news)
-    return NewsOut.model_validate(news)
+    return _news_out(news)
 
 
 class ScheduleRequest(BaseModel):
@@ -730,7 +768,7 @@ async def schedule_news(
         **meta,
     )
     await session.refresh(news)
-    return NewsOut.model_validate(news)
+    return _news_out(news)
 
 
 @router.delete("/{news_id}", response_model=Message)
@@ -851,4 +889,4 @@ async def copy_news_to_city(
         **meta,
     )
     await session.refresh(news)
-    return NewsOut.model_validate(news)
+    return _news_out(news)

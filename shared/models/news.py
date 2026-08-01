@@ -8,12 +8,14 @@ from typing import TYPE_CHECKING
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Column,
     DateTime,
     Enum,
     Float,
     ForeignKey,
     Integer,
     String,
+    Table,
     Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -25,6 +27,18 @@ from shared.enums import NewsOrigin, NewsStatus
 if TYPE_CHECKING:
     from shared.models.city import City
     from shared.models.media import MediaAsset
+
+
+# Many-to-many: a single news item can target several cities at once (e.g. a
+# regional agency covering the whole oblast). This replaces cloning the item
+# into one News row per city — instead there is ONE News shown with multiple
+# channels, published to all of them with a single action.
+news_target_cities = Table(
+    "news_target_cities",
+    Base.metadata,
+    Column("news_id", ForeignKey("news.id", ondelete="CASCADE"), primary_key=True),
+    Column("city_id", ForeignKey("cities.id", ondelete="CASCADE"), primary_key=True),
+)
 
 
 class News(Base, TimestampMixin):
@@ -132,6 +146,12 @@ class News(Base, TimestampMixin):
     error: Mapped[str | None] = mapped_column(Text)
 
     city: Mapped[City | None] = relationship(back_populates="news")
+    #: All cities this item should be published to. When empty, the item targets
+    #: only ``city_id`` (backwards compatible). The primary ``city_id`` stays the
+    #: moderation-topic owner and the first target.
+    target_cities: Mapped[list[City]] = relationship(
+        secondary=news_target_cities, lazy="selectin"
+    )
     media: Mapped[list[MediaAsset]] = relationship(
         back_populates="news",
         cascade="all, delete-orphan",

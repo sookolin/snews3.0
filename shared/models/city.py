@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Integer, String, Text
+from sqlalchemy import Boolean, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from shared.database import Base, TimestampMixin
@@ -51,6 +51,17 @@ class City(Base, TimestampMixin):
 
     # Default template override for this city
     template_id: Mapped[int | None] = mapped_column(Integer)
+
+    # ── Daily weather post ───────────────────────────────────────────────────
+    #: When on, a daily weather forecast is auto-published to this city's
+    #: channels at ``weather_time`` (server-local HH:MM, 24h).
+    weather_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    #: Publication time as "HH:MM" (interpreted in the UI timezone offset).
+    weather_time: Mapped[str | None] = mapped_column(String(5))
+    #: Coordinates used to fetch the forecast. When empty the city ``name`` is
+    #: geocoded once via Open-Meteo's free geocoding API.
+    weather_lat: Mapped[float | None] = mapped_column(Float)
+    weather_lon: Mapped[float | None] = mapped_column(Float)
 
     channels: Mapped[list[Channel]] = relationship(
         back_populates="city", cascade="all, delete-orphan"

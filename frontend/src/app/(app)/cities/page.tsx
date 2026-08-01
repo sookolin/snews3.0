@@ -26,12 +26,17 @@ interface CityForm {
   telegram_topic_id?: number | null;
   kind: string;
   is_world_bucket: boolean;
+  weather_enabled: boolean;
+  weather_time: string;
+  weather_lat?: number | null;
+  weather_lon?: number | null;
 }
 
 const EMPTY: CityForm = {
   name: "", description: "", keywords: "", extra_keywords: "", exclude_keywords: "",
   region: "", country: "", language: "ru", is_active: true, telegram_topic_id: null,
   kind: "city", is_world_bucket: false,
+  weather_enabled: false, weather_time: "08:00", weather_lat: null, weather_lon: null,
 };
 
 /** "other" entries are non-geographic sections: мир, интернет, спорт и т.п. */
@@ -62,6 +67,10 @@ export default function CitiesPage() {
       country: c.country ?? "", language: c.language, is_active: c.is_active,
       telegram_topic_id: c.telegram_topic_id,
       kind: c.kind ?? "city", is_world_bucket: c.is_world_bucket ?? false,
+      weather_enabled: c.weather_enabled ?? false,
+      weather_time: c.weather_time ?? "08:00",
+      weather_lat: c.weather_lat ?? null,
+      weather_lon: c.weather_lon ?? null,
     });
     setError(null);
   };
@@ -84,6 +93,10 @@ export default function CitiesPage() {
       kind: form.kind,
       // Only a non-geographic entry can collect world / unmatched news.
       is_world_bucket: form.kind === "other" ? form.is_world_bucket : false,
+      weather_enabled: form.weather_enabled,
+      weather_time: form.weather_time || null,
+      weather_lat: form.weather_lat ?? null,
+      weather_lon: form.weather_lon ?? null,
     };
     try {
       if (form.id) await api(`/cities/${form.id}`, { method: "PATCH", body: JSON.stringify(body) });
@@ -290,6 +303,47 @@ export default function CitiesPage() {
               onChange={(v) => upd({ is_active: v })}
               label="Активен (собирать новости)"
             />
+
+            {/* Daily weather post */}
+            <div className="rounded-lg border border-border p-4">
+              <Checkbox
+                checked={form.weather_enabled}
+                onChange={(v) => upd({ weather_enabled: v })}
+                label="Публиковать погоду на день в канал города"
+              />
+              {form.weather_enabled && (
+                <div className="mt-3 grid grid-cols-2 gap-4">
+                  <Field label="Время публикации" hint="Часовой пояс — как в настройках интерфейса">
+                    <input
+                      className="input"
+                      type="time"
+                      value={form.weather_time}
+                      onChange={(e) => upd({ weather_time: e.target.value })}
+                    />
+                  </Field>
+                  <div />
+                  <Field label="Широта" hint="Необязательно — иначе определится по названию города">
+                    <input
+                      className="input"
+                      type="number"
+                      step="any"
+                      value={form.weather_lat ?? ""}
+                      onChange={(e) => upd({ weather_lat: e.target.value === "" ? null : Number(e.target.value) })}
+                    />
+                  </Field>
+                  <Field label="Долгота" hint="Необязательно">
+                    <input
+                      className="input"
+                      type="number"
+                      step="any"
+                      value={form.weather_lon ?? ""}
+                      onChange={(e) => upd({ weather_lon: e.target.value === "" ? null : Number(e.target.value) })}
+                    />
+                  </Field>
+                </div>
+              )}
+            </div>
+
             <div className="flex justify-end border-t border-border pt-4">
               <button className="btn-primary" onClick={save}>Сохранить</button>
             </div>

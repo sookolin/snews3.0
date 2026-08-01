@@ -30,6 +30,10 @@ class NewsUpdate(BaseModel):
     title: str | None = None
     text: str | None = None
     city_id: int | None = None
+    #: Replace the set of target cities (channels) for this news. When omitted
+    #: the current targets are kept; ``[]`` clears them (then only the primary
+    #: city is used at publish time).
+    target_city_ids: list[int] | None = None
     template_id: int | None = None
     ai_profile_id: int | None = None
     is_spoiler: bool | None = None
@@ -55,6 +59,18 @@ class NewsUpdate(BaseModel):
     is_world_news: bool | None = None
 
 
+def _target_ids_from_orm(news) -> list[int]:  # type: ignore[no-untyped-def]
+    """Flat list of target city ids for a News ORM row (UI channel chips).
+
+    Falls back to ``[city_id]`` so legacy rows without explicit targets still
+    show their single channel.
+    """
+    ids = [c.id for c in (getattr(news, "target_cities", None) or [])]
+    if not ids and getattr(news, "city_id", None):
+        ids = [news.city_id]
+    return ids
+
+
 class NewsListItem(ORMModel):
     id: int
     title: str | None
@@ -62,6 +78,9 @@ class NewsListItem(ORMModel):
     status: NewsStatus
     origin: NewsOrigin
     city_id: int | None
+    #: Every city (channel) this item will be published to. One chip per id is
+    #: shown in the "Канал" column. Falls back to ``[city_id]`` for legacy rows.
+    target_city_ids: list[int] = Field(default_factory=list)
     source_id: int | None
     match_score: float | None
     is_spoiler: bool
@@ -96,6 +115,8 @@ class NewsOut(ORMModel):
     status: NewsStatus
     origin: NewsOrigin
     city_id: int | None
+    #: Every city (channel) this item will be published to.
+    target_city_ids: list[int] = Field(default_factory=list)
     source_id: int | None
     template_id: int | None
     ai_profile_id: int | None

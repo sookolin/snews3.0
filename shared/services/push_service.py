@@ -64,6 +64,20 @@ class PushService:
         public, private = await asyncio.to_thread(_generate_keys)
         await self.settings.set(PUBLIC_KEY, public, category="push")
         await self.settings.set(PRIVATE_KEY, private, category="push", is_secret=True)
+        # Ensure a valid VAPID contact — several push services reject
+        # "mailto:admin@localhost". Derive it from the configured admin URL.
+        if not await self.settings.get(CONTACT, ""):
+            from shared.config import settings as app_settings
+
+            host = ""
+            try:
+                from urllib.parse import urlparse
+
+                host = urlparse(str(getattr(app_settings, "admin_panel_url", "") or "")).hostname or ""
+            except Exception:
+                host = ""
+            contact = f"mailto:admin@{host}" if host else "mailto:admin@sonews.ru"
+            await self.settings.set(CONTACT, contact, category="push")
         await self.session.commit()
         logger.info("vapid_keys_generated")
         return public

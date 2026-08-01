@@ -45,6 +45,7 @@ interface NewsDetail extends NewsItem {
   is_world_news?: boolean;
   reply_to_news_id?: number | null;
   published_message_ids?: Record<string, number[]>;
+  target_city_ids?: number[];
   media: MediaAsset[];
 }
 
@@ -168,6 +169,7 @@ export default function NewsEditorPage() {
           hide_source: news.hide_source ?? false,
           source_url_override: news.source_url_override ?? null,
           publish_immediately: news.publish_immediately ?? false,
+          target_city_ids: news.target_city_ids ?? [],
           edit_comment: "Edited via admin editor",
         }),
       });
@@ -381,6 +383,42 @@ export default function NewsEditorPage() {
                 onChange={(v) => update({ apply_watermark: v })}
                 label="Водяной знак"
               />
+            </div>
+          </div>
+
+          {/* Target cities (channels this single news publishes to) */}
+          <div className="rounded-lg border border-border p-4">
+            <div className="mb-2 text-sm font-medium">
+              Каналы публикации ({(news.target_city_ids ?? []).length || (news.city_id ? 1 : 0)})
+            </div>
+            <p className="mb-2 text-xs text-muted-foreground">
+              Одна новость публикуется одной кнопкой во все выбранные города с применением
+              шаблона каждого города.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {allCities?.items.map((c) => {
+                const current = news.target_city_ids ?? (news.city_id ? [news.city_id] : []);
+                const on = current.includes(c.id);
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${
+                      on
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border bg-card text-muted-foreground hover:border-primary/50"
+                    }`}
+                    onClick={() => {
+                      const set = new Set(current);
+                      if (set.has(c.id)) set.delete(c.id);
+                      else set.add(c.id);
+                      update({ target_city_ids: Array.from(set) });
+                    }}
+                  >
+                    {c.name}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

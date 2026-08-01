@@ -64,6 +64,10 @@ class CityService:
             template_id=payload.template_id,
             kind=payload.kind,
             is_world_bucket=payload.is_world_bucket,
+            weather_enabled=payload.weather_enabled,
+            weather_time=payload.weather_time,
+            weather_lat=payload.weather_lat,
+            weather_lon=payload.weather_lon,
         )
         self.session.add(city)
         await self.session.flush()

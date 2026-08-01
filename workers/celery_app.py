@@ -66,6 +66,12 @@ celery_app.conf.beat_schedule = {
         "task": "workers.tasks.send_daily_digests",
         "schedule": crontab(minute=5),
     },
+    # Every minute, publish the daily weather post to any city whose configured
+    # weather time matches the current minute (per the UI timezone offset).
+    "publish-city-weather": {
+        "task": "workers.tasks.publish_city_weather",
+        "schedule": 60.0,
+    },
 }
 
 _T = TypeVar("_T")

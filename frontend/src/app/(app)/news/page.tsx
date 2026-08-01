@@ -360,9 +360,19 @@ export default function NewsPage() {
                         🌍 Мировые
                       </span>
                     ) : (
-                      <span className="badge bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:ring-indigo-900">
-                        {cityName(n.city_id)}
-                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        {((n.target_city_ids && n.target_city_ids.length > 0)
+                          ? n.target_city_ids
+                          : (n.city_id ? [n.city_id] : [])
+                        ).map((cid) => (
+                          <span
+                            key={cid}
+                            className="badge bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:ring-indigo-900"
+                          >
+                            {cityName(cid)}
+                          </span>
+                        ))}
+                      </div>
                     )}
                   </td>
                   <td className="px-4 py-3">{origin(n)}</td>

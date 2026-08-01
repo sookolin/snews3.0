@@ -253,12 +253,29 @@ async def subscribe_push(
     session: DBSession,
     actor: CurrentUser,
 ) -> Message:
-    """Register this device for Web Push (replaces a same-endpoint entry)."""
+    """Register this device for Web Push (replaces a same-endpoint entry).
+
+    Subscribing a device also opts the user into the default push events when
+    they have no push preferences yet. Without this, a freshly subscribed
+    device would receive nothing — ``PushService.notify`` only sends events the
+    user has explicitly enabled, so registering alone was not enough.
+    """
     devices = [
         d for d in (actor.push_subscriptions or []) if d.get("endpoint") != payload.endpoint
     ]
     devices.append({"endpoint": payload.endpoint, "keys": payload.keys})
     actor.push_subscriptions = devices
+
+    prefs = dict(actor.notify_prefs or {})
+    if not prefs.get("push"):
+        # Sensible defaults: the moderation-relevant events.
+        prefs["push"] = {
+            "news_pending": True,
+            "news_published": True,
+            "news_failed": True,
+        }
+        actor.notify_prefs = prefs
+
     await session.commit()
     return Message(detail="Устройство подписано на уведомления")
 

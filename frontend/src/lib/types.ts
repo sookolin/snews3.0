@@ -16,6 +16,11 @@ export interface City {
   kind?: string;
   /** True for the single section that collects world / unmatched news. */
   is_world_bucket?: boolean;
+  /** Daily weather post config. */
+  weather_enabled?: boolean;
+  weather_time?: string | null;
+  weather_lat?: number | null;
+  weather_lon?: number | null;
   created_at: string;
 }
 
@@ -58,6 +63,8 @@ export interface NewsItem {
   status: string;
   origin: string;
   city_id?: number;
+  /** Every city (channel) this item publishes to; shown as chips. */
+  target_city_ids?: number[];
   source_id?: number;
   match_score?: number;
   is_spoiler: boolean;
