@@ -19,14 +19,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# --- Dependency layer (rarely changes) -------------------------------------
-# Install Python deps and the Playwright browser BEFORE copying the frequently
-# edited application code. This keeps the expensive (and network-flaky)
-# chromium download cached across ordinary code changes, so editing files under
-# shared/ no longer forces a full re-download on rebuild.
+# Copy the full source tree first. The editable install (`pip install -e .`)
+# needs every package declared in pyproject.toml (shared, backend, workers,
+# telegram_bot) to exist, so all of them must be present before installing.
 COPY pyproject.toml README.md ./
-# Minimal source needed for the editable install to resolve its metadata.
 COPY shared ./shared
+COPY backend ./backend
+COPY workers ./workers
+COPY telegram_bot ./telegram_bot
+COPY scripts ./scripts
+COPY alembic ./alembic
+COPY alembic.ini ./alembic.ini
+
 RUN pip install --upgrade pip && pip install -e .
 
 # Playwright browser (for JS-heavy website parsing). Installed to a shared path
@@ -35,17 +39,6 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN mkdir -p /ms-playwright \
     && python -m playwright install --with-deps chromium \
     && chmod -R a+rx /ms-playwright
-
-# --- Application code layer (changes often) --------------------------------
-# Re-copy shared/ (so edits land) plus the rest of the app. These COPYs are
-# cheap and do not invalidate the dependency/browser layers above.
-COPY shared ./shared
-COPY backend ./backend
-COPY workers ./workers
-COPY telegram_bot ./telegram_bot
-COPY scripts ./scripts
-COPY alembic ./alembic
-COPY alembic.ini ./alembic.ini
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
