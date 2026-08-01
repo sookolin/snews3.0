@@ -40,10 +40,29 @@ async def _set_source_cities(session: DBSession, source_id: int, city_ids: list[
 async def list_sources(
     session: DBSession,
     params: PaginationParams = Depends(),
+    city_id: int | None = None,
     _: User = Depends(require_permission(Permission.SOURCE_VIEW)),
 ) -> Page[SourceOut]:
-    sources, total = await CRUDService(session, Source).list(params.offset, params.size)
-    return Page.create([SourceOut.model_validate(s) for s in sources], total, params)
+    from sqlalchemy import func
+    from sqlalchemy.orm import selectinload
+    from shared.models.source import source_cities
+
+    stmt = select(Source).options(selectinload(Source.cities))
+    count_stmt = select(func.count()).select_from(Source)
+
+    if city_id is not None:
+        stmt = stmt.join(source_cities, source_cities.c.source_id == Source.id).where(
+            source_cities.c.city_id == city_id
+        )
+        count_stmt = count_stmt.join(source_cities, source_cities.c.source_id == Source.id).where(
+            source_cities.c.city_id == city_id
+        )
+
+    total = await session.scalar(count_stmt) or 0
+    rows = (
+        await session.scalars(stmt.order_by(Source.id.desc()).offset(params.offset).limit(params.size))
+    ).all()
+    return Page.create([SourceOut.model_validate(s) for s in rows], total, params)
 
 
 @router.post("", response_model=SourceOut, status_code=201)

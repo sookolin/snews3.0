@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import Link from "next/link";
-import { Eye, Pencil, Tags, Trash2, UserCircle, ShieldOff, Ban } from "lucide-react";
+import { Eye, Pencil, Settings2, Tags, Trash2, UserCircle, ShieldOff, Ban } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
 import type { Page, User } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
@@ -62,6 +62,8 @@ export default function UsersPage() {
     useSWR<Record<string, string>>("/users/role-labels", fetcher);
   const { data: roleColorsData, mutate: mutateColors } =
     useSWR<Record<string, string>>("/users/role-colors", fetcher);
+  const { data: rolePermsData, mutate: mutateRolePerms } =
+    useSWR<Record<string, { grant: string[]; deny: string[] }>>("/users/role-permissions", fetcher);
   const { data: me } = useSWR<User>("/auth/me", fetcher, { revalidateOnFocus: false });
   const isSuperAdmin = me?.role === "super_admin";
   const [form, setForm] = useState<UserForm | null>(null);
@@ -69,6 +71,10 @@ export default function UsersPage() {
   // Rename-roles dialog: labels + colors together.
   const [renaming, setRenaming] = useState<Record<string, string> | null>(null);
   const [renamingColors, setRenamingColors] = useState<Record<string, string>>({});
+  // Role permissions management dialog
+  const [rolePermsModal, setRolePermsModal] = useState<
+    Record<string, { grant: string[]; deny: string[] }> | null
+  >(null);
   const [preview, setPreview] = useState<string | null>(null);
   const toast = useToast();
 
@@ -91,6 +97,54 @@ export default function UsersPage() {
     } catch (e) {
       toast.error((e as Error).message);
     }
+  };
+
+  const saveRolePerms = async () => {
+    if (!rolePermsModal) return;
+    try {
+      await api("/users/role-permissions", { method: "PUT", body: JSON.stringify(rolePermsModal) });
+      await mutateRolePerms();
+      setRolePermsModal(null);
+      toast.success("Права ролей сохранены");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  const openRolePermsModal = () => {
+    // Clone existing or start empty
+    const base: Record<string, { grant: string[]; deny: string[] }> = {};
+    for (const r of catalog?.all_roles ?? []) {
+      if (r === "super_admin") continue;
+      base[r] = {
+        grant: [...(rolePermsData?.[r]?.grant ?? [])],
+        deny: [...(rolePermsData?.[r]?.deny ?? [])],
+      };
+    }
+    setRolePermsModal(base);
+  };
+
+  const setRolePermState = (
+    role: string,
+    perm: string,
+    next: "grant" | "deny" | "role"
+  ) => {
+    if (!rolePermsModal) return;
+    const cur = rolePermsModal[role] ?? { grant: [], deny: [] };
+    const g = new Set(cur.grant);
+    const d = new Set(cur.deny);
+    g.delete(perm); d.delete(perm);
+    if (next === "grant") g.add(perm);
+    if (next === "deny") d.add(perm);
+    setRolePermsModal({ ...rolePermsModal, [role]: { grant: [...g], deny: [...d] } });
+  };
+
+  const rolePermStateOf = (role: string, perm: string): "grant" | "deny" | "role" => {
+    if (!rolePermsModal) return "role";
+    const cur = rolePermsModal[role];
+    if (cur?.deny?.includes(perm)) return "deny";
+    if (cur?.grant?.includes(perm)) return "grant";
+    return "role";
   };
 
   const applyPreview = (role: string | null) => {
@@ -198,6 +252,9 @@ export default function UsersPage() {
         title="Пользователи"
         action={
           <div className="flex gap-2">
+            <button className="btn-outline" onClick={openRolePermsModal}>
+              <Settings2 className="h-4 w-4" /> Права ролей
+            </button>
             <button className="btn-outline" onClick={() => { setRenaming({ ...ROLE_LABELS }); setRenamingColors({ ...ROLE_COLORS }); }}>
               <Tags className="h-4 w-4" /> Названия ролей
             </button>
@@ -494,6 +551,86 @@ export default function UsersPage() {
             ))}
             <div className="flex justify-end border-t border-border pt-4">
               <button className="btn-primary" onClick={saveNames}>Сохранить</button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Role permissions modal */}
+      <Modal
+        open={!!rolePermsModal}
+        onClose={() => setRolePermsModal(null)}
+        title="Права ролей"
+        wide
+      >
+        {rolePermsModal && catalog && (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Настройте базовый набор прав каждой роли. <b>По умолчанию</b> — стандартный набор роли.{" "}
+              <b>Разрешить</b> — добавить право сверх стандарта. <b>Запретить</b> — убрать право из роли.
+              Индивидуальные переопределения для конкретного пользователя всегда имеют приоритет.
+            </p>
+            {/* Tabs by role */}
+            {Object.keys(rolePermsModal).map((role) => (
+              <div key={role} className="rounded-lg border border-border">
+                <div className="border-b border-border bg-muted/40 px-4 py-2.5">
+                  <span className="font-semibold" style={{ color: ROLE_COLORS[role] }}>
+                    {ROLE_LABELS[role] ?? role}
+                  </span>
+                  <span className="ml-2 text-xs text-muted-foreground">({role})</span>
+                </div>
+                <div className="max-h-64 overflow-y-auto p-4">
+                  <div className="space-y-4">
+                    {Object.entries(
+                      catalog.permissions.reduce<Record<string, typeof catalog.permissions>>(
+                        (acc, p) => { (acc[p.group] ??= []).push(p); return acc; },
+                        {}
+                      )
+                    ).map(([group, perms]) => (
+                      <div key={group}>
+                        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                          {group}
+                        </div>
+                        <div className="space-y-1.5">
+                          {perms.map((p) => {
+                            const st = rolePermStateOf(role, p.value);
+                            const defaultHas = (catalog.roles[role] ?? []).includes(p.value);
+                            return (
+                              <div
+                                key={p.value}
+                                className="grid grid-cols-1 items-center gap-2 rounded border border-border/60 p-2 sm:grid-cols-[1fr_150px]"
+                              >
+                                <div className="min-w-0">
+                                  <div className="text-sm leading-tight">{p.label}</div>
+                                  <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                                    {p.value}
+                                    {defaultHas && (
+                                      <span className="ml-1 rounded bg-emerald-50 px-1 py-px text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
+                                        по умолч.
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                <Select
+                                  value={st}
+                                  onChange={(v) => setRolePermState(role, p.value, v as "grant" | "deny" | "role")}
+                                >
+                                  <option value="role">По умолчанию</option>
+                                  <option value="grant">Разрешить</option>
+                                  <option value="deny">Запретить</option>
+                                </Select>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+            <div className="flex justify-end border-t border-border pt-4">
+              <button className="btn-primary" onClick={saveRolePerms}>Сохранить</button>
             </div>
           </div>
         )}

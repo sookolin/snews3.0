@@ -4,7 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import { Pencil, RefreshCw, Trash2 } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
-import type { Page, Source } from "@/lib/types";
+import type { Page, Source, City } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal, Field } from "@/components/Modal";
 import { Checkbox, Select } from "@/components/Controls";
@@ -19,16 +19,35 @@ const ENGINES = ["auto", "beautifulsoup", "lxml", "playwright"];
 export default function SourcesPage() {
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(50);
-  const { data, mutate } = useSWR<Page<Source>>(`/sources?page=${page}&size=${size}`, fetcher);
+  const [cityFilter, setCityFilter] = useState<string>("");
+  const [showHelp, setShowHelp] = useState(false);
   const [form, setForm] = useState<Partial<Source> | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
   const toast = useToast();
+
+  // Cities for dropdown filter and display
+  const { data: citiesData } = useSWR<Page<City>>("/cities?size=200", fetcher);
+  const cities = citiesData?.items ?? [];
+  const cityMap = Object.fromEntries(cities.map((c) => [c.id, c.name]));
+
+  const cityParam = cityFilter ? `&city_id=${cityFilter}` : "";
+  const { data, mutate } = useSWR<Page<Source>>(
+    `/sources?page=${page}&size=${size}${cityParam}`,
+    fetcher,
+  );
+
+  // Auto-sort: group by first linked city (name), then unlinked at bottom
+  const sortedItems = [...(data?.items ?? [])].sort((a, b) => {
+    const aCity = a.city_ids?.[0] != null ? (cityMap[a.city_ids[0]] ?? "") : "￿";
+    const bCity = b.city_ids?.[0] != null ? (cityMap[b.city_ids[0]] ?? "") : "￿";
+    if (aCity !== bCity) return aCity.localeCompare(bCity, "ru");
+    return a.name.localeCompare(b.name, "ru");
+  });
 
   const openNew = () =>
     setForm({
       name: "", url: "", type: "rss", parser_engine: "auto",
-      check_interval_seconds: 300, is_active: true,
+      check_interval_seconds: 300, is_active: true, city_ids: [],
     });
   const openEdit = (s: Source) => setForm({ ...s });
   const upd = (patch: Partial<Source>) => setForm((f) => ({ ...f!, ...patch }));
@@ -68,6 +87,13 @@ export default function SourcesPage() {
     }
   };
 
+  // Toggle a city in the edit form's city_ids list
+  const toggleFormCity = (cityId: number) => {
+    const ids = form?.city_ids ?? [];
+    const next = ids.includes(cityId) ? ids.filter((c) => c !== cityId) : [...ids, cityId];
+    upd({ city_ids: next });
+  };
+
   return (
     <div>
       <PageHeader
@@ -81,6 +107,29 @@ export default function SourcesPage() {
           </div>
         }
       />
+
+      {/* City filter + stats bar */}
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="w-56">
+          <Select
+            value={cityFilter}
+            onChange={(v) => { setCityFilter(v); setPage(1); }}
+          >
+            <option value="">Все города</option>
+            {cities
+              .filter((c) => c.kind === "city" || !c.kind)
+              .sort((a, b) => a.name.localeCompare(b.name, "ru"))
+              .map((c) => (
+                <option key={c.id} value={String(c.id)}>{c.name}</option>
+              ))}
+          </Select>
+        </div>
+        {data && (
+          <span className="text-sm text-muted-foreground">
+            {data.total} источник{data.total === 1 ? "" : data.total < 5 ? "а" : "ов"}
+          </span>
+        )}
+      </div>
 
       {showHelp && (
         <div className="card mb-5 space-y-2 p-5 text-sm">
@@ -127,7 +176,7 @@ export default function SourcesPage() {
           </p>
           <p className="text-muted-foreground">
             Кнопка проверки запускает опрос сразу. В колонке ошибок наведите курсор, чтобы
-            увидеть текст последней ошибки. Подробное описание есть в файле docs/SOURCES.md.
+            увидеть текст последней ошибки.
           </p>
         </div>
       )}
@@ -194,6 +243,36 @@ export default function SourcesPage() {
                 />
               </Field>
             </div>
+
+            {/* City binding */}
+            <Field label="Города" hint="Новости идут прямо в выбранные города, минуя ключевые слова">
+              <div className="mt-1 flex max-h-40 flex-wrap gap-1.5 overflow-y-auto rounded-lg border border-border p-2">
+                {cities
+                  .filter((c) => c.kind === "city" || !c.kind)
+                  .sort((a, b) => a.name.localeCompare(b.name, "ru"))
+                  .map((c) => {
+                    const active = (form.city_ids ?? []).includes(c.id);
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => toggleFormCity(c.id)}
+                        className={`rounded-md border px-2.5 py-0.5 text-xs font-medium transition-colors ${
+                          active
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                        }`}
+                      >
+                        {c.name}
+                      </button>
+                    );
+                  })}
+                {cities.length === 0 && (
+                  <span className="text-xs text-muted-foreground">Нет городов</span>
+                )}
+              </div>
+            </Field>
+
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Прокси" hint="Использовать прокси-сервер для запросов">
                 <div className="pt-2">
@@ -266,13 +345,33 @@ export default function SourcesPage() {
         <div className="table-wrap">
           <ResizableTable
             id="sources"
-            columns={["Название", "Тип", "Интервал", "Ошибки", "Действия"]}
+            columns={["Название", "Город", "Тип", "Интервал", "Ошибки", "Действия"]}
           >
-              {data?.items.map((s) => (
-                <tr key={s.id} className="border-t border-border">
+            {sortedItems.map((s) => {
+              const sourceCities = (s.city_ids ?? [])
+                .map((id) => cityMap[id])
+                .filter(Boolean);
+              return (
+                <tr key={s.id} className={`border-t border-border${!s.is_active ? " opacity-50" : ""}`}>
                   <td className="px-4 py-3">
                     <div className="font-medium">{s.name}</div>
                     <div className="max-w-xs truncate text-xs text-muted-foreground">{s.url}</div>
+                  </td>
+                  <td className="px-4 py-3">
+                    {sourceCities.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {sourceCities.map((name) => (
+                          <span
+                            key={name}
+                            className="rounded-md bg-sky-50 px-2 py-0.5 text-xs text-sky-700 ring-1 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:ring-sky-800"
+                          >
+                            {name}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-xs italic text-muted-foreground/60">все</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">{s.type}</td>
                   <td className="px-4 py-3">{s.check_interval_seconds}s</td>
@@ -297,14 +396,15 @@ export default function SourcesPage() {
                     </div>
                   </td>
                 </tr>
-              ))}
-              {data && data.items.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-4 py-6 text-center text-muted-foreground">
-                    Источников нет
-                  </td>
-                </tr>
-              )}
+              );
+            })}
+            {data && data.items.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-4 py-6 text-center text-muted-foreground">
+                  Источников нет
+                </td>
+              </tr>
+            )}
           </ResizableTable>
         </div>
       </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Upload, Link2, Trash2, EyeOff, Eye, LayoutGrid, GalleryHorizontal } from "lucide-react";
+import { Upload, Link2, Trash2, EyeOff, Eye, LayoutGrid, GalleryHorizontal, Ghost } from "lucide-react";
 import { api, getToken } from "@/lib/api";
 
 export interface MediaAsset {
@@ -158,18 +158,27 @@ export function MediaManager({ newsId, media, onChange }: Props) {
                   ))}
                 </div>
                 <div className="text-xs text-muted-foreground">{m.type}</div>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  <button className="btn-outline px-2 py-0.5 text-xs" onClick={() => patch(m.id, { is_enabled: !m.is_enabled })}>
-                    {m.is_enabled ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                <div className="mt-1 flex gap-1">
+                  <button
+                    className="btn-icon h-7 w-7"
+                    title={m.is_enabled ? "Скрыть вложение" : "Показать вложение"}
+                    onClick={() => patch(m.id, { is_enabled: !m.is_enabled })}
+                  >
+                    {m.is_enabled ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
                   </button>
                   <button
-                    className={`px-2 py-0.5 text-xs rounded-md border ${m.is_spoiler ? "bg-primary text-primary-foreground border-primary" : "border-border"}`}
+                    className={`btn-icon h-7 w-7 ${m.is_spoiler ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
+                    title={m.is_spoiler ? "Убрать спойлер" : "Пометить как спойлер"}
                     onClick={() => patch(m.id, { is_spoiler: !m.is_spoiler })}
                   >
-                    Спойлер {m.is_spoiler ? "✓" : ""}
+                    <Ghost className="h-3.5 w-3.5" />
                   </button>
-                  <button className="btn-danger px-2 py-0.5 text-xs" onClick={() => remove(m.id)}>
-                    <Trash2 className="h-3 w-3" />
+                  <button
+                    className="btn-icon-danger h-7 w-7"
+                    title="Удалить вложение"
+                    onClick={() => remove(m.id)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </div>
               </div>

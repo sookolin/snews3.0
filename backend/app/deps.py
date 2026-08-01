@@ -50,6 +50,28 @@ async def get_current_user(
     user = await session.get(User, int(user_id))
     if user is None or not user.is_active:
         raise AuthenticationError("User not found or inactive", code="user_inactive")
+
+    # Merge role-level permission overrides (configured in Users → Права ролей)
+    # into the user's effective permissions so they are picked up by the guard.
+    try:
+        from shared.services.settings_service import SettingsService
+        role_perms_cfg = await SettingsService(session).get("roles.permissions", {}) or {}
+        role_key = user.role.value if hasattr(user.role, "value") else str(user.role)
+        role_cfg = role_perms_cfg.get(role_key, {})
+        if role_cfg:
+            existing = dict(user.permissions or {})
+            r_grant = set(role_cfg.get("grant") or [])
+            r_deny  = set(role_cfg.get("deny") or [])
+            u_grant = set(existing.get("grant") or [])
+            u_deny  = set(existing.get("deny") or [])
+            # User-level overrides always win; role-level fills the gaps.
+            merged_grant = list((r_grant - u_deny) | u_grant)
+            merged_deny  = list((r_deny  - u_grant) | u_deny)
+            # Mutate in-place — session is not committed, so DB is untouched.
+            user.permissions = {"grant": merged_grant, "deny": merged_deny}
+    except Exception:  # noqa: BLE001 — never break auth because of this
+        pass
+
     return user
 
 

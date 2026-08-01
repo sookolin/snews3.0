@@ -71,3 +71,12 @@ class SourceOut(ORMModel):
     last_error: str | None
     error_count: int
     created_at: datetime
+    city_ids: list[int] = []
+
+    @classmethod
+    def model_validate(cls, obj: object, **kwargs):  # type: ignore[override]
+        out = super().model_validate(obj, **kwargs)
+        # Populate city_ids from the eagerly-loaded `cities` relationship when present.
+        if hasattr(obj, "cities") and obj.cities is not None:
+            out.city_ids = [c.id for c in obj.cities]
+        return out

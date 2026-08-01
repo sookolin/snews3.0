@@ -11,6 +11,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { BellButton } from "@/components/BellButton";
 import { useProfileWatcher } from "@/lib/useProfileWatcher";
 import { useRoleLabels } from "@/lib/roles";
+import { useNewsPing } from "@/lib/useNewsPing";
 
 const COLLAPSE_KEY = "snews.sidebar.collapsed";
 
@@ -36,6 +37,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const labels = useRoleLabels();
 
   useProfileWatcher();
+  useNewsPing();
 
   useEffect(() => {
     if (!getToken()) router.replace("/login");
@@ -140,7 +142,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <img
                 src={me.photo_url}
                 alt={me.full_name || me.email || "Аватар"}
-                className="h-7 w-7 rounded-full object-cover ring-1 ring-sky-600/30"
+                className="h-7 w-7 rounded-full object-cover ring-2 ring-sky-500/40"
                 width={28}
                 height={28}
               />

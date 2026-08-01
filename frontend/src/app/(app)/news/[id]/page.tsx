@@ -261,7 +261,12 @@ export default function NewsEditorPage() {
         body: JSON.stringify({ city_id: Number(copyCity), publish_immediately: copyPublish }),
       });
       setCopyModal(false);
-      toast.success(`Скопировано: новость #${copied.id}`);
+      if (copyPublish) {
+        toast.success(`Скопировано и опубликовано: новость #${copied.id}`);
+      } else {
+        // Open the editor for the copied news so the user can review/edit before publishing.
+        router.push(`/news/${copied.id}`);
+      }
     } catch (e) {
       toast.error((e as Error).message);
     } finally {

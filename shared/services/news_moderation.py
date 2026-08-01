@@ -74,6 +74,20 @@ class NewsModerationService:
             city_name = city.name if city else ""
 
         author = "" if news.submitted_anonymously else (news.author_name or "")
+
+        # Load global tags so premium tg-emoji placeholders render in the card.
+        global_tags: list[dict] = []
+        try:
+            from shared.services.settings_service import SettingsService
+            import json as _json
+            raw = await SettingsService(self.session).get("templates.global_tags", "") or ""
+            if isinstance(raw, str) and raw.strip().startswith("["):
+                global_tags = _json.loads(raw)
+            elif isinstance(raw, list):
+                global_tags = raw
+        except Exception:
+            pass
+
         return TemplateRenderer().render(
             template,
             title=news.title or news.original_title or "",
@@ -83,6 +97,7 @@ class NewsModerationService:
             city=city_name,
             author=author,
             emoji=news.emoji or "",
+            global_tags=global_tags,
         )
 
     # ── moderation card ─────────────────────────────────────────────────────
@@ -175,10 +190,29 @@ class NewsModerationService:
             return 0
 
         from aiogram import Bot
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
         from shared.services.html_sanitizer import sanitize_telegram_html
 
         text = sanitize_telegram_html(await self.render(news))
+
+        # Rebuild the inline keyboard so it is preserved after the edit.
+        # Telegram removes reply_markup when it is not explicitly passed.
+        reply_markup: InlineKeyboardMarkup | None = None
+        raw_buttons: list = news.buttons or []
+        if raw_buttons:
+            keyboard = [
+                [
+                    InlineKeyboardButton(text=btn.get("text", ""), url=btn.get("url") or None)
+                    for btn in row
+                    if btn.get("text")
+                ]
+                for row in raw_buttons
+            ]
+            keyboard = [row for row in keyboard if row]
+            if keyboard:
+                reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+
         bot = Bot(token=settings.telegram_bot_token)
         updated = 0
         try:
@@ -193,6 +227,7 @@ class NewsModerationService:
                     await bot.edit_message_text(
                         chat_id=target, message_id=first, text=text[:4096],
                         parse_mode="HTML", disable_web_page_preview=True,
+                        reply_markup=reply_markup,
                     )
                     updated += 1
                 except Exception:  # noqa: BLE001
@@ -200,7 +235,7 @@ class NewsModerationService:
                     try:
                         await bot.edit_message_caption(
                             chat_id=target, message_id=first, caption=text[:1024],
-                            parse_mode="HTML",
+                            parse_mode="HTML", reply_markup=reply_markup,
                         )
                         updated += 1
                     except Exception as exc:  # noqa: BLE001

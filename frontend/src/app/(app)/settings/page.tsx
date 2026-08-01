@@ -113,11 +113,6 @@ const META: Record<string, { label: string; hint: string; group: string }> = {
     group: "Интерфейс",
   },
   // telegram.world_topic_id removed — managed in Cities section
-  "ui.default_language": {
-    label: "Язык по умолчанию",
-    hint: "Язык интерфейса и сообщений (ru/en).",
-    group: "Интерфейс",
-  },
   "site.favicon_url": {
     label: "Favicon",
     hint: "URL иконки сайта (favicon.ico или ссылка на изображение).",

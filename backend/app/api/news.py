@@ -606,12 +606,12 @@ async def publish_now(
     meta: ClientMeta,
     actor: User = Depends(require_permission(Permission.NEWS_PUBLISH)),
 ) -> NewsOut:
-    """Queue the item for publication, respecting the spacing interval.
+    """Publish the item immediately, bypassing the spacing queue.
 
-    The publication queue keeps posts apart; only items flagged
-    ``publish_immediately`` bypass it. This mirrors the behaviour of approving
-    from the moderation card, so publishing from the editor no longer floods
-    the channel.
+    This endpoint is invoked from the editor's Publish button — an explicit
+    manual action by a moderator. It always publishes right away and never
+    places the item into the scheduled queue. Use ``/approve`` (from the
+    moderation card) when queue-based spacing is desired.
     """
     news = await _get_news(session, news_id)
     if news.published_message_ids:
@@ -620,15 +620,16 @@ async def publish_now(
         raise ValidationError("Новость уже опубликована — сначала снимите публикацию")
 
     news.status = NewsStatus.APPROVED
+    news.scheduled_at = None
     if news.moderated_by is None:
         news.moderated_by = actor.id
     if news.processed_at is None:
         news.processed_at = datetime.now(timezone.utc)
-
-    from workers.tasks import _schedule_publication
-
-    slot = await _schedule_publication(session, news)
     await session.flush()
+
+    from workers.tasks import publish_news as publish_task
+
+    publish_task.delay(news.id)
 
     await AuditService(session).log(
         "news.publish",
@@ -636,7 +637,7 @@ async def publish_now(
         actor=actor.email,
         entity_type="news",
         entity_id=news_id,
-        changes={"slot": slot},
+        changes={"slot": "immediate"},
         **meta,
     )
     await session.refresh(news)
@@ -779,7 +780,10 @@ async def copy_news_to_city(
         emoji=original.emoji,
         city_id=payload.city_id,
         source_id=original.source_id,
-        template_id=original.template_id,
+        # Do NOT copy template_id: the publisher resolves the correct template
+        # for the destination city. Carrying over the source city's template
+        # would publish with the wrong design.
+        template_id=None,
         origin=original.origin,
         status=NewsStatus.APPROVED if payload.publish_immediately else NewsStatus.PENDING,
         author_name=original.author_name,
@@ -793,6 +797,32 @@ async def copy_news_to_city(
         processed_at=datetime.now(timezone.utc),
     )
     session.add(news)
+    await session.flush()
+
+    # Copy media attachments from the original.
+    from shared.models.media import MediaAsset
+
+    await session.refresh(original, attribute_names=["media"])
+    for src_asset in original.media:
+        new_asset = MediaAsset(
+            news_id=news.id,
+            type=src_asset.type,
+            file_path=src_asset.file_path,
+            processed_path=src_asset.processed_path,
+            remote_url=src_asset.remote_url,
+            telegram_file_id=src_asset.telegram_file_id,
+            mime_type=src_asset.mime_type,
+            file_size=src_asset.file_size,
+            width=src_asset.width,
+            height=src_asset.height,
+            duration=src_asset.duration,
+            caption=src_asset.caption,
+            position=src_asset.position,
+            is_spoiler=src_asset.is_spoiler,
+            is_enabled=src_asset.is_enabled,
+            thumbnail_path=src_asset.thumbnail_path,
+        )
+        session.add(new_asset)
     await session.flush()
 
     if payload.publish_immediately:

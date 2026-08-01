@@ -165,10 +165,10 @@ class IngestionPipeline:
 
         for item in items:
             try:
-                created = await self._process_item(source, item, matcher, dedup, min_score, report)
-                if created is not None:
+                created_ids = await self._process_item(source, item, matcher, dedup, min_score, report)
+                for cid in created_ids:
                     report.created += 1
-                    report.created_ids.append(created)
+                    report.created_ids.append(cid)
             except Exception as exc:  # noqa: BLE001
                 report.errors += 1
                 log.error("item_process_failed", source=source_id, error=str(exc))
@@ -220,50 +220,71 @@ class IngestionPipeline:
         dedup: DedupService,
         min_score: float,
         report: IngestReport,
-    ) -> int | None:
-        # 1) City matching
-        match = matcher.match(item.text, item.title)
-        matched_city = match.city
-        match_score = match.score
-        matched_keywords = match.matched_keywords
+    ) -> list[int]:
+        """Process one parsed item; return IDs of all created News rows.
 
-        # World news are kept even without a city keyword match (they are of
-        # general interest); everything else must be regionally relevant.
+        When the source is linked to more than one city the item is cloned into
+        each of those cities so it can be moderated and published independently
+        in the respective channel (e.g. a regional news agency covering several
+        cities creates one pending news per city).
+        """
+        linked_cities = [c for c in source.cities if c.is_active]
         is_world = _looks_like_world_news(item.title, item.text, self._world_markers)
 
-        # If the source is explicitly bound to cities, its posts belong to those
-        # cities directly — keyword matching only picks the best one, and we do
-        # not drop items that fail the keyword threshold.
-        linked_cities = list(source.cities)
         if linked_cities:
-            if matched_city is None or match_score < min_score:
-                matched_city = linked_cities[0]
-                match_score = max(match_score, 1.0)
-                matched_keywords = matched_keywords or []
-        elif matched_city is None or match_score < min_score:
-            # Nothing matched any monitored city → this is not local news. Such
-            # items are classified as world news and routed to the world topic
-            # instead of being discarded (unless world news are switched off).
-            if not self._world_news_enabled:
-                report.unmatched += 1
-                return None
-            is_world = True
-            # World news belong to the dedicated «другие» entry (Мировые
-            # новости / Интернет), never to a real city — otherwise they would
-            # be moderated and published in that city's topic and channel.
-            bucket = await self._world_bucket()
-            if bucket is None:
-                report.unmatched += 1
-                return None
-            matched_city = bucket
-            match_score = max(match_score, 0.0)
+            # All explicitly linked cities receive a copy of the item.
+            # keyword matching is skipped — the editorial binding is authoritative.
+            target_cities: list[City] = linked_cities
+            match_score = 1.0
+            matched_keywords: list[str] = []
+        else:
+            # No city binding — fall back to keyword matching.
+            match = matcher.match(item.text, item.title)
+            if match.city and match.score >= min_score and match.city.is_active:
+                target_cities = [match.city]
+                match_score = match.score
+                matched_keywords = match.matched_keywords or []
+            else:
+                # Nothing matched → world/unmatched bucket.
+                if not self._world_news_enabled:
+                    report.unmatched += 1
+                    return []
+                bucket = await self._world_bucket()
+                if bucket is None:
+                    report.unmatched += 1
+                    return []
+                target_cities = [bucket]
+                match_score = 0.0
+                matched_keywords = []
+                is_world = True
 
-        # 2) Dedup
+        created_ids: list[int] = []
+        for city in target_cities:
+            nid = await self._create_for_city(
+                source, item, city, dedup, match_score, matched_keywords, is_world, report
+            )
+            if nid is not None:
+                created_ids.append(nid)
+        return created_ids
+
+    async def _create_for_city(
+        self,
+        source: Source,
+        item: ParsedItem,
+        city: City,
+        dedup: DedupService,
+        match_score: float,
+        matched_keywords: list[str],
+        is_world: bool,
+        report: IngestReport,
+    ) -> int | None:
+        """Dedup-check, persist and AI-process a single News row for *city*."""
+        # 1) Dedup (per-city: the same story may already exist for this city)
         dedup_result = await dedup.check(
             text=item.text,
             title=item.title,
             url=item.url,
-            city_id=matched_city.id,
+            city_id=city.id,
         )
         if dedup_result.is_duplicate:
             report.duplicates += 1
@@ -272,32 +293,37 @@ class IngestionPipeline:
 
         # Detect a follow-up: strongly similar to a recent published item but
         # not an outright duplicate → publish as a reply to that message.
-        follow_up_of = await self._find_follow_up_target(item, matched_city.id)
+        follow_up_of = await self._find_follow_up_target(item, city.id)
 
-        # 3) Persist raw news
+        # 2) Persist raw news
+        # When the source provides no publication timestamp (website parsers,
+        # some TG channels) fall back to the current time so the "В источнике"
+        # column is never blank — it then shows the ingestion moment which is
+        # a close enough approximation for real-time feeds.
+        source_published_at = item.published_at or datetime.now(timezone.utc)
         news = News(
             original_title=item.title,
             original_text=item.text,
             original_url=item.url,
             status=NewsStatus.PROCESSING,
             origin=NewsOrigin.PARSER,
-            city_id=matched_city.id,
+            city_id=city.id,
             source_id=source.id,
             content_hash=dedup_result.content_hash,
             simhash=dedup_result.simhash,
             match_score=match_score,
             matched_keywords=matched_keywords,
-            source_published_at=item.published_at,
+            source_published_at=source_published_at,
             is_world_news=is_world,
             reply_to_news_id=follow_up_of,
         )
         self.session.add(news)
         await self.session.flush()
 
-        # 4) Download media
+        # 3) Download media
         await self._ingest_media(news, item)
 
-        # 5) AI rewrite (best-effort — falls back to original on failure)
+        # 4) AI rewrite (best-effort — falls back to original on failure)
         await self._ai_process(news)
 
         news.status = NewsStatus.PENDING

@@ -261,21 +261,33 @@ export default function NewsPage() {
           ))}
         </Select>
         {!activeTab.cityId && (
-          <Select
-            className="max-w-[220px]"
-            value={cityId}
-            onChange={(v) => {
-              setCityId(v);
-              setPage(1);
-            }}
-          >
-            <option value="">Все разделы</option>
-            {cities?.items.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </Select>
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              className={`rounded-md border px-3 py-1 text-sm font-medium transition-colors ${
+                cityId === ""
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground"
+              }`}
+              onClick={() => { setCityId(""); setPage(1); }}
+            >
+              Все
+            </button>
+            {cities?.items
+              .filter((c) => c.kind === "city")
+              .map((c) => (
+                <button
+                  key={c.id}
+                  className={`rounded-md border px-3 py-1 text-sm font-medium transition-colors ${
+                    cityId === String(c.id)
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                  }`}
+                  onClick={() => { setCityId(String(c.id)); setPage(1); }}
+                >
+                  {c.name}
+                </button>
+              ))}
+          </div>
         )}
         <input
           className="input max-w-xs"
@@ -348,7 +360,7 @@ export default function NewsPage() {
                       </span>
                     ) : (
                       <span className="badge bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:ring-indigo-900">
-                        {n.is_world_news ? "🌍 " : ""}{cityName(n.city_id)}
+                        {cityName(n.city_id)}
                       </span>
                     )}
                   </td>

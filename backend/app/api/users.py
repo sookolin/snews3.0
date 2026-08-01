@@ -127,6 +127,48 @@ async def set_role_colors(
     return colors
 
 
+@router.get("/role-permissions", response_model=dict)
+async def get_role_permissions(
+    session: DBSession,
+    _: User = Depends(require_permission(Permission.USER_VIEW)),
+) -> dict:
+    """Return custom per-role permission overrides (grant / deny per role).
+
+    Format: {"admin": {"grant": [...], "deny": [...]}, ...}
+    """
+    from shared.services.settings_service import SettingsService
+
+    overrides = await SettingsService(session).get("roles.permissions", {}) or {}
+    return overrides
+
+
+@router.put("/role-permissions", response_model=dict)
+async def set_role_permissions(
+    payload: dict,
+    session: DBSession,
+    _: User = Depends(require_permission(Permission.USER_MANAGE)),
+) -> dict:
+    """Persist per-role permission overrides.
+
+    Payload: {"admin": {"grant": ["news:delete"], "deny": []}, ...}
+    Super admin role is immutable and always gets all permissions.
+    """
+    from shared.services.settings_service import SettingsService
+    from shared.enums import UserRole, Permission as P
+
+    allowed_roles = {r.value for r in UserRole} - {"super_admin"}
+    allowed_perms = {p.value for p in P}
+    cleaned: dict = {}
+    for role, overrides in (payload or {}).items():
+        if role not in allowed_roles:
+            continue
+        grant = [p for p in (overrides.get("grant") or []) if p in allowed_perms]
+        deny = [p for p in (overrides.get("deny") or []) if p in allowed_perms]
+        cleaned[role] = {"grant": grant, "deny": deny}
+    await SettingsService(session).set("roles.permissions", cleaned, category="ui")
+    return cleaned
+
+
 @router.get("", response_model=Page[UserOut])
 async def list_users(
     session: DBSession,
@@ -371,7 +413,11 @@ async def ban_user(
     actor: User = Depends(require_permission(Permission.USER_MANAGE)),
 ) -> UserOut:
     """Ban a user account. Banned users cannot log in by any method."""
+    from fastapi import HTTPException
     from shared.services.notify_router import notify_user
+
+    if user_id == actor.id:
+        raise HTTPException(status_code=400, detail="Нельзя заблокировать собственный аккаунт.")
 
     user = await UserService(session).get_or_404(user_id)
     user.is_banned = True

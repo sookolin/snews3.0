@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { useRef, useState } from "react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 
 /** Page-size options offered in every paginated table. */
 export const PAGE_SIZES = [20, 50, 100, 200];
@@ -27,6 +27,8 @@ export function Pagination({ page, size, total, onPage, onSize, position = "bott
   const to = Math.min(page * size, total);
 
   const [inputVal, setInputVal] = useState("");
+  const [open, setOpen] = useState(false);
+  const dropRef = useRef<HTMLDivElement>(null);
 
   const goToPage = (raw: string) => {
     const n = parseInt(raw, 10);
@@ -41,20 +43,48 @@ export function Pagination({ page, size, total, onPage, onSize, position = "bott
     >
       <div className="flex items-center gap-2 text-muted-foreground">
         <span className="whitespace-nowrap">На странице</span>
-        <select
-          className="input w-[92px] cursor-pointer"
-          value={size}
-          onChange={(e) => {
-            onSize(Number(e.target.value));
-            onPage(1);
-          }}
-        >
-          {PAGE_SIZES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
+
+        {/* Dropdown button — same pill style as city/status filters */}
+        <div ref={dropRef} className="relative">
+          <button
+            type="button"
+            className={`flex items-center gap-1.5 rounded-md border px-3 py-1 text-sm font-medium transition-colors ${
+              open
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-border bg-card text-foreground hover:border-primary/50"
+            }`}
+            onClick={() => setOpen((v) => !v)}
+            onBlur={(e) => {
+              if (!dropRef.current?.contains(e.relatedTarget as Node)) setOpen(false);
+            }}
+          >
+            {size}
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+          </button>
+
+          {open && (
+            <div className="absolute left-0 top-full z-50 mt-1 min-w-[72px] overflow-hidden rounded-lg border border-border bg-card shadow-md">
+              {PAGE_SIZES.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  className={`w-full px-4 py-1.5 text-left text-sm transition-colors hover:bg-muted ${
+                    s === size ? "font-semibold text-primary" : "text-foreground"
+                  }`}
+                  onMouseDown={(e) => {
+                    e.preventDefault(); // keep focus on trigger so onBlur fires after
+                    onSize(s);
+                    onPage(1);
+                    setOpen(false);
+                  }}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
         <span className="whitespace-nowrap">
           {from}–{to} из {total}
         </span>
