@@ -61,11 +61,28 @@ class TelegramParser(BaseParser):
         for wrap in soup.select(".tgme_widget_message_wrap"):
             text_node = wrap.select_one(".tgme_widget_message_text")
             text = text_node.get_text("\n", strip=True) if text_node else ""
-            if not text:
-                continue
 
             link_node = wrap.select_one("a.tgme_widget_message_date")
             post_url = link_node.get("href") if link_node else None
+
+            # Collect media first so photo/video-only posts (no text caption)
+            # are not silently dropped — many channels post images with an empty
+            # or very short caption, and skipping them lost real news.
+            media: list[ParsedMedia] = []
+            for photo in wrap.select(".tgme_widget_message_photo_wrap"):
+                style = photo.get("style", "")
+                match = _BG_IMAGE_RE.search(style)
+                if match:
+                    media.append(ParsedMedia(type=MediaType.PHOTO, url=match.group("url")))
+            for video in wrap.select("video"):
+                src = video.get("src")
+                if src:
+                    media.append(ParsedMedia(type=MediaType.VIDEO, url=src))
+
+            # Skip only truly empty posts (no text AND no media): service
+            # messages, join notices, poll stubs, etc.
+            if not text and not media:
+                continue
 
             # Parse the post timestamp from the <time datetime="..."> element
             # inside the message date link so we can populate source_published_at.
@@ -80,22 +97,14 @@ class TelegramParser(BaseParser):
                 except (ValueError, TypeError):
                     pass
 
-            media: list[ParsedMedia] = []
-            for photo in wrap.select(".tgme_widget_message_photo_wrap"):
-                style = photo.get("style", "")
-                match = _BG_IMAGE_RE.search(style)
-                if match:
-                    media.append(ParsedMedia(type=MediaType.PHOTO, url=match.group("url")))
-            for video in wrap.select("video"):
-                src = video.get("src")
-                if src:
-                    media.append(ParsedMedia(type=MediaType.VIDEO, url=src))
-
-            first_line = text.split("\n", 1)[0][:200]
+            # For media-only posts use a minimal placeholder so downstream
+            # dedup/AI still have something to work with.
+            body = text or "📷 Медиа-публикация"
+            first_line = body.split("\n", 1)[0][:200]
             items.append(
                 ParsedItem(
                     title=first_line,
-                    text=text,
+                    text=body,
                     url=post_url,
                     guid=post_url,
                     media=media,

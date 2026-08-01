@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Fragment, useState, useEffect } from "react";
 import useSWR from "swr";
-import { CalendarClock, Check, Pencil, Trash2, Undo2, X } from "lucide-react";
+import { CalendarClock, Check, ChevronDown, ChevronRight, Pencil, Trash2, Undo2, X } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
 import type { City, NewsItem, Page, Source, User } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
@@ -49,6 +49,28 @@ export default function NewsPage() {
   const [scheduling, setScheduling] = useState<NewsItem | null>(null);
   const [scheduleAt, setScheduleAt] = useState("");
   const [error, setError] = useState<string | null>(null);
+  //: Ids of rows expanded to preview their main text inline.
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  //: Lazily-loaded main text per news id (fetched when a row is expanded).
+  const [previews, setPreviews] = useState<Record<number, string>>({});
+  const toggleExpanded = async (id: number) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+    if (previews[id] === undefined) {
+      try {
+        const n = await api<{ text?: string; original_text?: string }>(`/news/${id}`);
+        const raw = n.text || n.original_text || "—";
+        // Strip HTML tags for a plain-text preview.
+        const plain = raw.replace(/<[^>]*>/g, "").trim() || "—";
+        setPreviews((p) => ({ ...p, [id]: plain }));
+      } catch {
+        setPreviews((p) => ({ ...p, [id]: "Не удалось загрузить текст" }));
+      }
+    }
+  };
 
   const { data: cities } = useSWR<Page<City>>("/cities?size=200", fetcher);
 
@@ -337,7 +359,8 @@ export default function NewsPage() {
                 </tr>
               )}
               {items.map((n) => (
-                <tr key={n.id} className="border-t border-border">
+                <Fragment key={n.id}>
+                <tr className="border-t border-border">
                   <td className="px-3 py-3">
                     <Checkbox
                       checked={selected.includes(n.id)}
@@ -347,6 +370,18 @@ export default function NewsPage() {
                   <td className="px-3 py-3 text-muted-foreground">{n.id}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        title={expanded.has(n.id) ? "Свернуть текст" : "Показать текст"}
+                        className="shrink-0 text-muted-foreground hover:text-foreground"
+                        onClick={() => toggleExpanded(n.id)}
+                      >
+                        {expanded.has(n.id) ? (
+                          <ChevronDown className="h-4 w-4" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4" />
+                        )}
+                      </button>
                       <a className="hover:text-primary hover:underline" href={`/news/${n.id}`}>
                         {n.emoji ? `${n.emoji} ` : ""}
                         {n.title || n.original_title || "—"}
@@ -439,6 +474,17 @@ export default function NewsPage() {
                     </div>
                   </td>
                 </tr>
+                {expanded.has(n.id) && (
+                  <tr className="border-t border-border bg-muted/30">
+                    <td />
+                    <td colSpan={8} className="px-4 py-3">
+                      <div className="whitespace-pre-wrap text-sm text-muted-foreground">
+                        {previews[n.id] ?? "Загрузка…"}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
               {data && items.length === 0 && (
                 <tr>
