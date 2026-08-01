@@ -310,18 +310,45 @@ async def test_push(session: DBSession, actor: CurrentUser) -> Message:
     devices = list(actor.push_subscriptions or [])
     if not devices:
         raise HTTPException(400, "Нет подписанных устройств. Включите тумблер push выше.")
-    sent = await PushService(session).send_test(
+    service = PushService(session)
+    sent = await service.send_test(
         actor,
         "Тест уведомления",
         "Если вы видите это — push работает.",
     )
     if sent == 0:
-        raise HTTPException(
-            400,
-            "Не удалось доставить push. Проверьте, что сайт открыт по HTTPS и "
-            "уведомления разрешены в браузере.",
-        )
+        reason = service.last_error or ""
+        # A corrupt VAPID key can never deliver — point the user at the reset.
+        if "corrupt" in reason or "not set" in reason:
+            raise HTTPException(
+                400,
+                "VAPID-ключ повреждён или отсутствует. Нажмите «Пересоздать ключи», "
+                "затем заново включите push и повторите проверку.",
+            )
+        detail = "Не удалось доставить push."
+        if reason:
+            detail += f" Причина: {reason}"
+        raise HTTPException(400, detail)
     return Message(detail=f"Отправлено на устройств: {sent}")
+
+
+@router.post("/push/reset", response_model=Message)
+async def reset_push_keys(session: DBSession, actor: CurrentUser) -> Message:
+    """Regenerate the server VAPID key pair and clear all stale subscriptions.
+
+    Recovers from a corrupt/mismatched VAPID key. All existing browser
+    subscriptions were made against the old public key and become invalid, so
+    every user's stored subscriptions are cleared; users must re-enable push.
+    Restricted to super admins since it affects every user.
+    """
+    if actor.role != UserRole.SUPER_ADMIN:
+        raise HTTPException(403, "Только супер-администратор может пересоздать ключи push")
+    await PushService(session).reset_keys()
+    await session.execute(
+        User.__table__.update().values(push_subscriptions=[])
+    )
+    await session.commit()
+    return Message(detail="Ключи push пересозданы. Включите push заново на каждом устройстве.")
 
 
 @router.delete("/push", response_model=Message)

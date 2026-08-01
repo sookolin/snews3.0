@@ -80,6 +80,23 @@ export async function sendTestPush(): Promise<string> {
   return r.detail;
 }
 
+/** Regenerate the server VAPID key pair (super-admin only).
+ *
+ * Recovers from a corrupt/mismatched key. All existing subscriptions are
+ * invalidated server-side, so this also unsubscribes the current device and
+ * re-subscribes it against the freshly generated key. */
+export async function resetPushKeys(): Promise<string> {
+  const r = await api<{ detail: string }>("/profile/push/reset", { method: "POST" });
+  // Old local subscription is now bound to a dead key — drop and recreate it.
+  try {
+    await unsubscribePush();
+    await subscribePush();
+  } catch {
+    /* the user can re-enable manually if re-subscribe fails */
+  }
+  return r.detail;
+}
+
 /** Drop this device locally and on the server. */
 export async function unsubscribePush(): Promise<void> {
   if (!supported()) return;

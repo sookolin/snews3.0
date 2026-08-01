@@ -13,7 +13,7 @@ import { Checkbox, Select, Switch } from "@/components/Controls";
 import { Modal, Field } from "@/components/Modal";
 import { useToast } from "@/components/Toast";
 import { useRoleLabels } from "@/lib/roles";
-import { pushState, subscribePush, unsubscribePush, sendTestPush } from "@/lib/push";
+import { pushState, subscribePush, unsubscribePush, sendTestPush, resetPushKeys } from "@/lib/push";
 import type { Profile } from "@/lib/types";
 
 const LANGUAGES = [
@@ -260,6 +260,22 @@ export default function ProfilePage() {
     }
   };
 
+  const [resettingPush, setResettingPush] = useState(false);
+  const resetKeys = async () => {
+    setResettingPush(true);
+    try {
+      const detail = await resetPushKeys();
+      setPush(await pushState());
+      await mutate();
+      toast.success(detail);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setResettingPush(false);
+    }
+  };
+  const isSuperAdmin = data?.user?.role === "super_admin";
+
   if (error) return <p className="text-red-600">Ошибка загрузки: {(error as Error).message}</p>;
   if (!data) return <p className="text-muted-foreground">Загрузка…</p>;
 
@@ -431,15 +447,27 @@ export default function ProfilePage() {
                   onChange={toggleDevice}
                   label="Присылать уведомления на это устройство"
                 />
-                {push.subscribed && (
-                  <button
-                    className="btn-outline text-sm"
-                    disabled={testingPush}
-                    onClick={testPush}
-                  >
-                    {testingPush ? "Отправка…" : "Проверить"}
-                  </button>
-                )}
+                <div className="flex items-center gap-2">
+                  {push.subscribed && (
+                    <button
+                      className="btn-outline text-sm"
+                      disabled={testingPush}
+                      onClick={testPush}
+                    >
+                      {testingPush ? "Отправка…" : "Проверить"}
+                    </button>
+                  )}
+                  {isSuperAdmin && (
+                    <button
+                      className="btn-outline text-sm"
+                      disabled={resettingPush}
+                      onClick={resetKeys}
+                      title="Пересоздать VAPID-ключи сервера (при повреждённом ключе)"
+                    >
+                      {resettingPush ? "Пересоздание…" : "Пересоздать ключи"}
+                    </button>
+                  )}
+                </div>
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
