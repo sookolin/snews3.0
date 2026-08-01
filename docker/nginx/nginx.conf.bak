@@ -30,23 +30,6 @@ http {
             default_type "text/plain";
         }
 
-        # Everything else on plain HTTP redirects to HTTPS. The ACME location
-        # above is matched first (^~) so certbot renewals still work over :80.
-        location / { return 301 https://$host$request_uri; }
-    }
-
-    # --- HTTPS server (TLS terminated here; certs from certbot) ---
-    server {
-        listen 443 ssl;
-        http2 on;
-        server_name admin.sonews.ru _;
-
-        ssl_certificate     /etc/letsencrypt/live/admin.sonews.ru/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/admin.sonews.ru/privkey.pem;
-        ssl_protocols TLSv1.2 TLSv1.3;
-        ssl_ciphers HIGH:!aNULL:!MD5;
-        ssl_session_cache shared:SSL:10m;
-
         # --- Backend API + docs ---
         # Using a variable in proxy_pass forces nginx to re-resolve the hostname
         # through the `resolver` above instead of pinning the IP at startup.
@@ -67,4 +50,15 @@ http {
         # --- Frontend (everything else) ---
         location / { set $frontend frontend:3000; proxy_pass http://$frontend$request_uri; include /etc/nginx/proxy_params.conf; }
     }
+
+    # HTTPS server (enabled after certbot provisions certificates).
+    # server {
+    #     listen 443 ssl http2;
+    #     server_name admin.sonews.ru;
+    #     ssl_certificate     /etc/letsencrypt/live/admin.sonews.ru/fullchain.pem;
+    #     ssl_certificate_key /etc/letsencrypt/live/admin.sonews.ru/privkey.pem;
+    #     include /etc/nginx/proxy_params.conf;
+    #     location /api/ { proxy_pass http://backend; }
+    #     location /     { proxy_pass http://frontend; }
+    # }
 }
