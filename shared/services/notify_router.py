@@ -73,6 +73,19 @@ async def notify_user(
     session.add(notif)
     await session.flush()
 
+    # 1b. Web Push mirror — deliver the very same event to the browser/PWA so
+    # push and the in-app bell fire together. Best-effort: a push failure must
+    # never break the bell. ``PushService.notify`` itself checks the user's push
+    # prefs, so a user who disabled this event for push simply gets nothing.
+    try:
+        from shared.services.push_service import PushService
+
+        await PushService(session).notify(
+            user, event=type, title=title, body=body or "", url=url or "/"
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     # 2. Telegram DM — only when the user is away or forced.
     if not user.telegram_id:
         return

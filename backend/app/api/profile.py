@@ -209,6 +209,18 @@ async def update_profile(
         session.add(notif)
         await session.flush()
 
+        # Mirror to Web Push (best-effort; respects the user's push prefs).
+        try:
+            await PushService(session).notify(
+                user,
+                event="profile_updated",
+                title="Профиль обновлён администратором",
+                body=f"Изменено: {changed_str}.",
+                url="/profile",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
         # Send a Telegram DM if the user has a linked account (best-effort).
         if user.telegram_id:
             bot = BotNotifyService(session)
@@ -268,16 +280,48 @@ async def subscribe_push(
 
     prefs = dict(actor.notify_prefs or {})
     if not prefs.get("push"):
-        # Sensible defaults: the moderation-relevant events.
+        # Sensible defaults: the moderation-relevant events plus the account
+        # events also shown by the in-app bell, so push mirrors the bell out of
+        # the box. The user can still fine-tune these checkboxes afterwards.
         prefs["push"] = {
             "news_pending": True,
             "news_published": True,
             "news_failed": True,
+            "role_changed": True,
+            "profile_updated": True,
+            "password_changed": True,
+            "account_deactivated": True,
+            "account_activated": True,
+            "2fa_reset": True,
         }
         actor.notify_prefs = prefs
 
     await session.commit()
     return Message(detail="Устройство подписано на уведомления")
+
+
+@router.post("/push/test", response_model=Message)
+async def test_push(session: DBSession, actor: CurrentUser) -> Message:
+    """Send a test push to this user's devices, bypassing event prefs.
+
+    Returns how many devices accepted it so misconfiguration (no device, dead
+    subscription, missing HTTPS/VAPID) is visible instead of failing silently.
+    """
+    devices = list(actor.push_subscriptions or [])
+    if not devices:
+        raise HTTPException(400, "Нет подписанных устройств. Включите тумблер push выше.")
+    sent = await PushService(session).send_test(
+        actor,
+        "Тест уведомления",
+        "Если вы видите это — push работает.",
+    )
+    if sent == 0:
+        raise HTTPException(
+            400,
+            "Не удалось доставить push. Проверьте, что сайт открыт по HTTPS и "
+            "уведомления разрешены в браузере.",
+        )
+    return Message(detail=f"Отправлено на устройств: {sent}")
 
 
 @router.delete("/push", response_model=Message)

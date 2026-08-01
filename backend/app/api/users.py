@@ -342,6 +342,23 @@ async def update_user(
         session.add(notif)
     if notifications:
         await session.flush()
+        # Mirror each in-app notification to Web Push so the browser/PWA hears
+        # about account changes too (best-effort; respects the user's push
+        # prefs and never breaks the request on failure).
+        try:
+            from shared.services.push_service import PushService
+
+            push = PushService(session)
+            for notif in notifications:
+                await push.notify(
+                    user,
+                    event=notif.type,
+                    title=notif.title,
+                    body=notif.body or "",
+                    url=notif.url or "/",
+                )
+        except Exception:  # noqa: BLE001
+            pass
 
     return UserOut.model_validate(user)
 
@@ -375,6 +392,19 @@ async def reset_user_2fa(
             created_at=datetime.now(timezone.utc),
         )
     )
+    await session.flush()
+    try:
+        from shared.services.push_service import PushService
+
+        await PushService(session).notify(
+            user,
+            event="2fa_reset",
+            title="Двухфакторная аутентификация сброшена",
+            body=f"Администратор {actor.email} отключил 2FA для вашего аккаунта.",
+            url="/profile",
+        )
+    except Exception:  # noqa: BLE001
+        pass
     await AuditService(session).log(
         "user.reset_2fa",
         user_id=actor.id,

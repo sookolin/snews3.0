@@ -58,6 +58,59 @@ def _looks_like_world_news(
     return any(marker in blob for marker in markers)
 
 
+# Region name → extra synonyms the text may use to refer to it. Lets a
+# multi-city regional source keep genuinely region-wide stories while dropping
+# unrelated federal/other-region news that names no monitored city.
+_REGION_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "московская область": (
+        "московская область", "московской области", "подмосковье",
+        "подмосковью", "подмосковный", "подмосковная", "подмосковные",
+        " мо ", "мособл",
+    ),
+}
+
+
+def _region_synonyms(region: str) -> tuple[str, ...]:
+    """All lowercase phrases that refer to ``region`` (the name + known aliases).
+
+    Falls back to the region name itself when no alias table entry exists, so an
+    operator only needs to fill in the city's ``region`` field for the relevance
+    filter to work.
+    """
+    region = (region or "").strip().lower()
+    if not region:
+        return ()
+    return (region, *_REGION_SYNONYMS.get(region, ()))
+
+
+def _regions_in_text(text: str | None) -> set[str]:
+    """Region canonical names whose name/alias appears in ``text``.
+
+    Used to infer the region a multi-city source covers from its display name
+    (e.g. «Московская область сегодня» → ``{"московская область"}``) so the
+    relevance filter has a region to check against even when the linked cities
+    have no ``region`` field configured.
+    """
+    blob = f" {(text or '').lower()} "
+    found: set[str] = set()
+    for canonical, aliases in _REGION_SYNONYMS.items():
+        for syn in (canonical, *aliases):
+            if syn in blob:
+                found.add(canonical)
+                break
+    return found
+
+
+def _mentions_region(title: str | None, text: str, regions: set[str]) -> bool:
+    """True if the text mentions any of the given regions (or their synonyms)."""
+    blob = f" {title or ''} {text[:800]} ".lower()
+    for region in regions:
+        for syn in _region_synonyms(region):
+            if syn in blob:
+                return True
+    return False
+
+
 @dataclass
 class IngestReport:
     source_id: int
@@ -223,10 +276,12 @@ class IngestionPipeline:
     ) -> list[int]:
         """Process one parsed item; return IDs of all created News rows.
 
-        When the source is linked to more than one city the item is cloned into
-        each of those cities so it can be moderated and published independently
-        in the respective channel (e.g. a regional news agency covering several
-        cities creates one pending news per city).
+        When the source is linked to more than one city, a genuinely
+        region-wide item becomes a SINGLE News targeting all of those cities at
+        once (``news.target_cities``); it is moderated and published to every
+        channel with one action. An item that clearly names one linked city
+        targets only that city. Items that name no linked city and do not
+        mention the region (nor look like world/federal news) are dropped.
         """
         linked_cities = [c for c in source.cities if c.is_active]
         is_world = _looks_like_world_news(item.title, item.text, self._world_markers)
@@ -253,6 +308,23 @@ class IngestionPipeline:
                 match_score = specific.score
                 matched_keywords: list[str] = specific.matched_keywords or []
             else:
+                # No specific city named. Only keep it as region-wide news if
+                # the text actually mentions the region (e.g. "Московская
+                # область"/"Подмосковье") or is genuinely world/federal news.
+                # Otherwise it is unrelated (e.g. a federal ОСАГО note) and is
+                # DROPPED rather than fanned out to every linked city.
+                #
+                # Region names come from the cities' ``region`` field and, as a
+                # fallback, from any known region name found in the source name
+                # (e.g. «Московская область сегодня»). This way the filter works
+                # even when the operator did not fill in each city's region.
+                regions = {c.region for c in linked_cities if c.region}
+                regions |= _regions_in_text(source.name)
+                if not (
+                    is_world or _mentions_region(item.title, item.text, regions)
+                ):
+                    report.unmatched += 1
+                    return []
                 target_cities = linked_cities
                 match_score = 1.0
                 matched_keywords = []

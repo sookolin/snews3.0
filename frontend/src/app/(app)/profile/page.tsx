@@ -13,7 +13,7 @@ import { Checkbox, Select, Switch } from "@/components/Controls";
 import { Modal, Field } from "@/components/Modal";
 import { useToast } from "@/components/Toast";
 import { useRoleLabels } from "@/lib/roles";
-import { pushState, subscribePush, unsubscribePush } from "@/lib/push";
+import { pushState, subscribePush, unsubscribePush, sendTestPush } from "@/lib/push";
 import type { Profile } from "@/lib/types";
 
 const LANGUAGES = [
@@ -21,13 +21,22 @@ const LANGUAGES = [
   { value: "en", label: "English" },
 ];
 
-/** Push event types a user can opt into, in the order they are shown. */
+/** Push event types a user can opt into, in the order they are shown.
+ *
+ * These mirror the in-app bell events: the same events that raise a bell
+ * notification also fire a Web Push when enabled here. The news-moderation
+ * events come first (what a moderator cares about most), followed by the
+ * account events shown in the bell section below. */
 const PUSH_TYPES: { key: string; label: string; hint: string }[] = [
   { key: "news_pending", label: "Новость на модерации", hint: "Пришла новость, ожидающая решения." },
   { key: "news_published", label: "Новость опубликована", hint: "Пост ушёл в канал." },
   { key: "news_failed", label: "Ошибка публикации", hint: "Публикация не удалась." },
-  { key: "bot_submission", label: "Заявка из бота", hint: "Читатель предложил новость." },
-  { key: "system", label: "Системные события", hint: "Парсер, воркеры, интеграции." },
+  { key: "role_changed", label: "Изменение роли", hint: "Когда администратор меняет вашу роль." },
+  { key: "profile_updated", label: "Обновление профиля", hint: "Когда кто-то изменил ваши данные." },
+  { key: "password_changed", label: "Смена пароля", hint: "Когда пароль изменён администратором." },
+  { key: "account_deactivated", label: "Блокировка аккаунта", hint: "Уведомление о блокировке." },
+  { key: "account_activated", label: "Разблокировка аккаунта", hint: "Уведомление о разблокировке." },
+  { key: "2fa_reset", label: "Сброс 2FA", hint: "Когда администратор отключил вашу 2FA." },
 ];
 
 /** In-app bell notification types a user can opt into. */
@@ -238,6 +247,19 @@ export default function ProfilePage() {
     }
   };
 
+  const [testingPush, setTestingPush] = useState(false);
+  const testPush = async () => {
+    setTestingPush(true);
+    try {
+      const detail = await sendTestPush();
+      toast.success(detail);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setTestingPush(false);
+    }
+  };
+
   if (error) return <p className="text-red-600">Ошибка загрузки: {(error as Error).message}</p>;
   if (!data) return <p className="text-muted-foreground">Загрузка…</p>;
 
@@ -403,11 +425,22 @@ export default function ProfilePage() {
         <div className="space-y-3 px-5 py-4">
           {data.is_self ? (
             push.supported ? (
-              <Switch
-                checked={push.subscribed}
-                onChange={toggleDevice}
-                label="Присылать уведомления на это устройство"
-              />
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <Switch
+                  checked={push.subscribed}
+                  onChange={toggleDevice}
+                  label="Присылать уведомления на это устройство"
+                />
+                {push.subscribed && (
+                  <button
+                    className="btn-outline text-sm"
+                    disabled={testingPush}
+                    onClick={testPush}
+                  >
+                    {testingPush ? "Отправка…" : "Проверить"}
+                  </button>
+                )}
+              </div>
             ) : (
               <p className="text-sm text-muted-foreground">
                 Браузер не поддерживает push. На iPhone откройте сайт в Safari и добавьте его на
@@ -419,6 +452,10 @@ export default function ProfilePage() {
               Устройства подключает сам пользователь. Здесь можно настроить только типы событий.
             </p>
           )}
+          <p className="text-xs text-muted-foreground">
+            Push дублирует уведомления из колокольчика: включённые здесь события
+            приходят и в панель, и на устройство.
+          </p>
           <div className="divide-y divide-border border-t border-border pt-1">
             {PUSH_TYPES.map((t) => (
               <div key={t.key} className="flex items-center justify-between gap-4 py-3">

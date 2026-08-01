@@ -49,9 +49,9 @@ interface NewsDetail extends NewsItem {
   media: MediaAsset[];
 }
 
-interface City { id: number; name: string }
+interface City { id: number; name: string; template_id?: number | null }
 interface Channel { id: number; city_id: number; title: string; username?: string; avatar_url?: string }
-interface Template { id: number; name: string }
+interface Template { id: number; name: string; is_default?: boolean }
 interface UserRef { id: number; email: string; full_name?: string }
 
 export default function NewsEditorPage() {
@@ -146,6 +146,15 @@ export default function NewsEditorPage() {
   const sourcePlaceholder = linkedSource
     ? `Название источника (сейчас: ${linkedSource})`
     : "Название источника (Источник: …)";
+
+  // Name of the template the backend will actually use when the dropdown is
+  // left on "По умолчанию": the city's bound template first, then the global
+  // default. Mirrors backend `_resolve_template_for_news`.
+  const templateById = (tid?: number | null) =>
+    tid ? templates?.items.find((t) => t.id === tid)?.name : undefined;
+  const defaultTemplateName = templates?.items.find((t) => t.is_default)?.name;
+  const effectiveTemplateName =
+    templateById(city?.template_id) ?? defaultTemplateName;
 
   const save = async () => {
     setSaving(true);
@@ -372,10 +381,24 @@ export default function NewsEditorPage() {
                   value={news.template_id ?? ""}
                   onChange={(v) => update({ template_id: v ? Number(v) : null })}
                 >
-                  <option value="">По умолчанию</option>
+                  {/* "По умолчанию" resolves, in the backend, to the city's own
+                      template first, then the global default. Show which one is
+                      actually in effect so the operator isn't misled into
+                      thinking a generic template is used. */}
+                  <option value="">
+                    {effectiveTemplateName
+                      ? `По умолчанию (${effectiveTemplateName})`
+                      : "По умолчанию"}
+                  </option>
                   {templates?.items.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </Select>
               </div>
+              {!news.template_id && effectiveTemplateName && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Будет использован шаблон «{effectiveTemplateName}»
+                  {city?.template_id ? " (привязан к городу)" : " (шаблон по умолчанию)"}.
+                </p>
+              )}
             </div>
             <div className="flex items-end pb-2">
               <Checkbox

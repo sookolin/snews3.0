@@ -70,6 +70,16 @@ export async function subscribePush(): Promise<void> {
   });
 }
 
+/** Ask the server to send a test push to every registered device.
+ *
+ * Bypasses the per-event preferences so the user can confirm delivery works
+ * regardless of which events they enabled. Returns the human-readable result
+ * message from the backend. */
+export async function sendTestPush(): Promise<string> {
+  const r = await api<{ detail: string }>("/profile/push/test", { method: "POST" });
+  return r.detail;
+}
+
 /** Drop this device locally and on the server. */
 export async function unsubscribePush(): Promise<void> {
   if (!supported()) return;

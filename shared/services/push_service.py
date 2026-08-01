@@ -119,11 +119,14 @@ class PushService:
             logger.warning("push_send_error", error=str(exc))
             return 0
 
-    async def notify(self, user: User, event: str, title: str, body: str, url: str = "/") -> int:
-        """Push one event to every device of a user who opted into that event."""
-        prefs = (user.notify_prefs or {}).get("push") or {}
-        if not prefs.get(event):
-            return 0
+    async def _deliver(
+        self, user: User, title: str, body: str, url: str, event: str
+    ) -> int:
+        """Send a payload to every device of ``user``; prune dead subscriptions.
+
+        Shared by :meth:`notify` (respects prefs) and :meth:`send_test` (does
+        not). Returns how many devices accepted the push.
+        """
         devices = list(user.push_subscriptions or [])
         if not devices:
             return 0
@@ -146,6 +149,21 @@ class PushService:
             user.push_subscriptions = alive
             await self.session.commit()
         return sent
+
+    async def notify(self, user: User, event: str, title: str, body: str, url: str = "/") -> int:
+        """Push one event to every device of a user who opted into that event."""
+        prefs = (user.notify_prefs or {}).get("push") or {}
+        if not prefs.get(event):
+            return 0
+        return await self._deliver(user, title, body, url, event)
+
+    async def send_test(self, user: User, title: str, body: str) -> int:
+        """Push a test notification to every device, ignoring event prefs.
+
+        Used by the cabinet's "проверить" button so a user can confirm delivery
+        works before relying on it, regardless of which events they enabled.
+        """
+        return await self._deliver(user, title, body, "/profile", "test")
 
     async def broadcast(
         self, event: str, title: str, body: str, url: str = "/", **filters: Any
