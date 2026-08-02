@@ -50,7 +50,26 @@ class TelegramParser(BaseParser):
         url = _normalise_channel_url(self.source.url)
         async with build_client(self.source) as client:
             try:
-                response = await client.get(url)
+                # t.me/s/ serves the full message list only to browser-like
+                # clients. With the generic bot UA Telegram returns a stripped
+                # page (no ``.tgme_widget_message_wrap``), so channels appeared
+                # to "not parse". Send realistic browser headers and request the
+                # embedded view explicitly.
+                response = await client.get(
+                    url,
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/125.0.0.0 Safari/537.36"
+                        ),
+                        "Accept": (
+                            "text/html,application/xhtml+xml,application/xml;"
+                            "q=0.9,image/avif,image/webp,*/*;q=0.8"
+                        ),
+                        "Accept-Language": "ru,en;q=0.9",
+                    },
+                )
                 response.raise_for_status()
             except Exception as exc:  # noqa: BLE001
                 raise ParserError(f"Failed to fetch Telegram channel: {exc}") from exc

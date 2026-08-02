@@ -62,6 +62,10 @@ class City(Base, TimestampMixin):
     #: geocoded once via Open-Meteo's free geocoding API.
     weather_lat: Mapped[float | None] = mapped_column(Float)
     weather_lon: Mapped[float | None] = mapped_column(Float)
+    #: Local date (UI timezone) the weather post was last published for. Guards
+    #: the "publish within a tolerance window" scheduler against posting twice
+    #: the same day when several beat ticks fall inside the window.
+    weather_last_published_on: Mapped[str | None] = mapped_column(String(10))
 
     channels: Mapped[list[Channel]] = relationship(
         back_populates="city", cascade="all, delete-orphan"

@@ -23,6 +23,7 @@ class ChannelBase(BaseModel):
     schedule_to_minute: int | None = Field(default=None, ge=0, le=1439)
     min_interval_seconds: int = Field(default=0, ge=0)
     template_id: int | None = None
+    watermark_id: int | None = None
 
 
 class ChannelCreate(ChannelBase):
@@ -41,6 +42,7 @@ class ChannelUpdate(BaseModel):
     schedule_to_minute: int | None = Field(default=None, ge=0, le=1439)
     min_interval_seconds: int | None = Field(default=None, ge=0)
     template_id: int | None = None
+    watermark_id: int | None = None
 
 
 class ChannelOut(ORMModel):
@@ -57,4 +59,5 @@ class ChannelOut(ORMModel):
     schedule_to_minute: int | None
     min_interval_seconds: int
     template_id: int | None
+    watermark_id: int | None
     created_at: datetime

@@ -18,7 +18,7 @@ from shared.models.watermark import WatermarkProfile
 
 log = get_logger("watermark")
 
-_POSITIONS = {"top-left", "top-right", "bottom-left", "bottom-right", "center"}
+_POSITIONS = {"top-left", "top-right", "bottom-left", "bottom-right", "center", "random"}
 
 
 class WatermarkService:
@@ -91,6 +91,20 @@ class WatermarkService:
         ow, oh = obj_size
         mx, my = self.profile.margin_x, self.profile.margin_y
         pos = self.profile.position if self.profile.position in _POSITIONS else "bottom-right"
+        if pos == "random":
+            # Random placement anchored on the centre: pick an offset from the
+            # middle within the free space (keeping the mark fully inside the
+            # frame, minus the margin). Every image gets a different spot, which
+            # makes the watermark harder to crop out automatically.
+            import random
+
+            cx, cy = (bw - ow) // 2, (bh - oh) // 2
+            # Max deviation from centre that still keeps the mark on-canvas.
+            dx_max = max(0, (bw - ow) // 2 - mx)
+            dy_max = max(0, (bh - oh) // 2 - my)
+            x = cx + random.randint(-dx_max, dx_max) if dx_max else cx
+            y = cy + random.randint(-dy_max, dy_max) if dy_max else cy
+            return x, y
         mapping = {
             "top-left": (mx, my),
             "top-right": (bw - ow - mx, my),
@@ -168,8 +182,22 @@ class WatermarkService:
             ) from exc
         log.debug("video_watermarked", dst=dst_path)
 
+    @staticmethod
+    def _rand_frac() -> float:
+        """A random value in [-1, 1] for a per-render centre offset."""
+        import random
+
+        return random.uniform(-1.0, 1.0)
+
     def _ffmpeg_overlay_expr(self) -> str:
         mx, my = self.profile.margin_x, self.profile.margin_y
+        if self.profile.position == "random":
+            # Centre ± a random fraction of the free half-space, clamped so the
+            # overlay stays fully on-frame. One offset per video render.
+            fx, fy = self._rand_frac(), self._rand_frac()
+            x = f"(main_w-overlay_w)/2+({fx:.4f})*((main_w-overlay_w)/2-{mx})"
+            y = f"(main_h-overlay_h)/2+({fy:.4f})*((main_h-overlay_h)/2-{my})"
+            return f"{x}:{y}"
         mapping = {
             "top-left": f"{mx}:{my}",
             "top-right": f"main_w-overlay_w-{mx}:{my}",
@@ -181,6 +209,11 @@ class WatermarkService:
 
     def _ffmpeg_text_pos(self) -> str:
         mx, my = self.profile.margin_x, self.profile.margin_y
+        if self.profile.position == "random":
+            fx, fy = self._rand_frac(), self._rand_frac()
+            x = f"x=(w-tw)/2+({fx:.4f})*((w-tw)/2-{mx})"
+            y = f"y=(h-th)/2+({fy:.4f})*((h-th)/2-{my})"
+            return f"{x}:{y}"
         mapping = {
             "top-left": f"x={mx}:y={my}",
             "top-right": f"x=w-tw-{mx}:y={my}",

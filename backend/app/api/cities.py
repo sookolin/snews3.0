@@ -138,3 +138,34 @@ async def test_topic(
 
         raise ExternalServiceError(detail)
     return Message(detail=detail)
+
+
+@router.post("/{city_id}/weather/test", response_model=Message)
+async def test_weather(
+    city_id: int,
+    session: DBSession,
+    _: User = Depends(require_permission(Permission.CITY_MANAGE)),
+) -> Message:
+    """Publish the weather post for this city right now (manual check).
+
+    Runs synchronously so the operator gets an immediate result: how many
+    channels received the post, or a clear reason if none did. Bypasses the
+    schedule and the once-per-day marker.
+    """
+    from shared.exceptions import ExternalServiceError, NotFoundError
+    from workers.tasks import _publish_weather_for_city
+
+    city = await CityService(session).get_or_404(city_id)
+    if city is None:
+        raise NotFoundError("Город не найден")
+    try:
+        sent = await _publish_weather_for_city(session, city)
+    except Exception as exc:  # noqa: BLE001
+        raise ExternalServiceError(f"Не удалось опубликовать погоду: {exc}") from exc
+    await session.commit()
+    if sent == 0:
+        raise ExternalServiceError(
+            "Погода не опубликована: нет активных каналов у города, "
+            "либо не удалось получить прогноз/координаты."
+        )
+    return Message(detail=f"Погода опубликована в каналов: {sent}")

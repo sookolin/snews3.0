@@ -129,6 +129,38 @@ class PushService:
             logger.error("vapid_private_key_corrupt", error=str(exc))
             return None
 
+    @staticmethod
+    def _vapid_from_pem(pem: str):  # type: ignore[no-untyped-def]
+        """Build a py-vapid ``Vapid`` object from a PEM private key.
+
+        This is the crux of the earlier "Could not deserialize / ASN.1 invalid
+        length" failure: pywebpush treats a *string* ``vapid_private_key`` as
+        either a file path or a **base64url-encoded raw DER** key — never as a
+        PEM block. Passing our PEM text made py-vapid base64-decode the PEM
+        header/body into garbage. Handing pywebpush a ready ``Vapid`` instance
+        built from the PEM bypasses that ambiguous string handling entirely.
+        """
+        from py_vapid import Vapid
+
+        pem_bytes = pem.encode("utf-8")
+        # Prefer the in-memory loader; fall back to a temp file for older
+        # py-vapid builds that only expose ``from_file``.
+        if hasattr(Vapid, "from_pem"):
+            return Vapid.from_pem(pem_bytes)
+        import os
+        import tempfile
+
+        fd, path = tempfile.mkstemp(suffix=".pem")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(pem_bytes)
+            return Vapid.from_file(path)
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
     def _send_one(self, device: dict, payload: str, pem: str, contact: str) -> int:
         """Blocking single-device send; returns the HTTP status (0 on error)."""
         from pywebpush import WebPushException, webpush
@@ -137,7 +169,7 @@ class PushService:
             response = webpush(
                 subscription_info={"endpoint": device["endpoint"], "keys": device.get("keys", {})},
                 data=payload,
-                vapid_private_key=pem,
+                vapid_private_key=self._vapid_from_pem(pem),
                 vapid_claims={"sub": contact},
                 timeout=10,
             )

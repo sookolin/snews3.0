@@ -121,6 +121,19 @@ export default function CitiesPage() {
     }
   };
 
+  const [testingWeather, setTestingWeather] = useState(false);
+  const testWeather = async (id: number) => {
+    setTestingWeather(true);
+    try {
+      const r = await api<{ detail: string }>(`/cities/${id}/weather/test`, { method: "POST" });
+      toast.success(r.detail);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setTestingWeather(false);
+    }
+  };
+
   const recreateTopic = async (id: number) => {
     try {
       await api(`/cities/${id}/create-topic`, { method: "POST" });
@@ -340,6 +353,21 @@ export default function CitiesPage() {
                       onChange={(e) => upd({ weather_lon: e.target.value === "" ? null : Number(e.target.value) })}
                     />
                   </Field>
+                  {form.id && (
+                    <div className="col-span-2">
+                      <button
+                        type="button"
+                        className="btn-outline text-sm"
+                        disabled={testingWeather}
+                        onClick={() => testWeather(form.id!)}
+                      >
+                        {testingWeather ? "Публикация…" : "Опубликовать погоду сейчас"}
+                      </button>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Проверка: сразу отправит прогноз в каналы города (минуя расписание).
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

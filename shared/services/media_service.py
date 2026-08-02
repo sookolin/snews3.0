@@ -62,8 +62,17 @@ class MediaService:
             .limit(1)
         )
 
-    async def process_asset(self, asset: MediaAsset, apply_watermark: bool = True) -> None:
-        """Watermark an image/video asset in place (sets ``processed_path``)."""
+    async def process_asset(
+        self,
+        asset: MediaAsset,
+        apply_watermark: bool = True,
+        profile: WatermarkProfile | None = None,
+    ) -> None:
+        """Watermark an image/video asset in place (sets ``processed_path``).
+
+        ``profile`` overrides which watermark is used (e.g. the target channel's
+        bound profile); when omitted the default active profile is used.
+        """
         source_rel = asset.file_path
         # If we only have a remote URL, download it first so we can watermark it.
         if not source_rel and asset.remote_url:
@@ -92,7 +101,8 @@ class MediaService:
             asset.processed_path = source_rel
             return
 
-        profile = await self._default_watermark()
+        if profile is None:
+            profile = await self._default_watermark()
         if profile is None:
             asset.processed_path = source_rel
             return

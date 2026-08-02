@@ -34,6 +34,7 @@ const POSITIONS = [
   { value: "bottom-left", label: "Снизу слева" },
   { value: "bottom-right", label: "Снизу справа" },
   { value: "center", label: "По центру" },
+  { value: "random", label: "Случайно (от центра)" },
 ];
 
 const EMPTY: Partial<Watermark> = {

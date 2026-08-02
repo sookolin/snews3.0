@@ -24,9 +24,11 @@ interface Channel {
   is_active: boolean;
   min_interval_seconds: number;
   template_id?: number | null;
+  watermark_id?: number | null;
 }
 
 interface Template { id: number; name: string }
+interface Watermark { id: number; name: string }
 
 /** Fields Telegram owns — never sent back on save, always parsed. */
 const PARSED_FIELDS = ["username", "avatar_url"] as const;
@@ -46,6 +48,7 @@ export default function ChannelsPage() {
   const { data, mutate } = useSWR<Page<Channel>>("/channels?size=100", fetcher);
   const { data: cities } = useSWR<Page<City>>("/cities?size=100", fetcher);
   const { data: templates } = useSWR<Page<Template>>("/templates?size=100", fetcher);
+  const { data: watermarks } = useSWR<Page<Watermark>>("/watermarks?size=100", fetcher);
   const [form, setForm] = useState<Partial<Channel> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const toast = useToast();
@@ -218,6 +221,15 @@ export default function ChannelsPage() {
               >
                 <option value="">По умолчанию</option>
                 {templates?.items.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </Select>
+            </Field>
+            <Field label="Водяной знак" hint="Накладывается на медиа при публикации в этот канал">
+              <Select
+                value={form.watermark_id ?? ""}
+                onChange={(v) => upd({ watermark_id: v ? Number(v) : null })}
+              >
+                <option value="">По умолчанию</option>
+                {watermarks?.items.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
               </Select>
             </Field>
             <Checkbox

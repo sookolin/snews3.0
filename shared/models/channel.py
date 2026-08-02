@@ -47,6 +47,11 @@ class Channel(Base, TimestampMixin):
     min_interval_seconds: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
 
     template_id: Mapped[int | None] = mapped_column(ForeignKey("templates.id", ondelete="SET NULL"))
+    # Watermark profile applied to this channel's media. NULL = use the default
+    # active profile (or none). Lets each channel brand its media differently.
+    watermark_id: Mapped[int | None] = mapped_column(
+        ForeignKey("watermark_profiles.id", ondelete="SET NULL")
+    )
 
     city: Mapped[City] = relationship(back_populates="channels")
 

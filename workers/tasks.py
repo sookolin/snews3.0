@@ -219,13 +219,17 @@ async def _schedule_publication(session, news: News) -> str:  # type: ignore[no-
     last_published = await session.scalar(
         select(func.max(News.published_at)).where(News.published_at.is_not(None))
     )
-    # Also consider items already dispatched for immediate publication: their
-    # publish may still be in flight (or may have failed), and we must not fire
-    # a burst of posts in the same minute either way.
+    # Also consider items just approved for immediate publication whose publish
+    # task may still be in flight (published_at not written yet). Only recent
+    # ones matter: an approval older than one gap no longer constrains spacing,
+    # so a queue that has cooled down lets the next post go out immediately
+    # ("first immediate, then every N minutes"). Using processed_at without this
+    # recency bound made stale approvals randomly push slots to +2×gap.
     last_dispatched = await session.scalar(
         select(func.max(News.processed_at)).where(
             News.status == NewsStatus.APPROVED,
             News.processed_at.is_not(None),
+            News.processed_at >= now - gap,
             News.id != news.id,
         )
     )
@@ -533,6 +537,24 @@ def send_daily_digests() -> dict:  # type: ignore[no-untyped-def]
     return run_async(_run())
 
 
+def _parse_hhmm(value: str | None) -> int | None:
+    """Parse ``"HH:MM"`` into minutes-since-midnight, tolerant of stray input.
+
+    Accepts values with or without leading zeros (``9:5`` → 545). Returns
+    ``None`` when the value is missing or not a valid time.
+    """
+    if not value:
+        return None
+    try:
+        hh, mm = value.strip().split(":", 1)
+        h, m = int(hh), int(mm)
+    except (ValueError, AttributeError):
+        return None
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        return None
+    return h * 60 + m
+
+
 async def _publish_weather_for_city(session, city) -> int:
     """Fetch the forecast and post it to every active channel of *city*."""
     from shared.models.channel import Channel
@@ -578,23 +600,72 @@ def publish_city_weather() -> dict:
         from shared.models.city import City
         from shared.services.settings_service import SettingsService
 
+        # Tolerance (minutes): the beat tick fires every 60s but can drift or be
+        # delayed in the queue, so an exact "HH:MM == now" match would silently
+        # skip the minute and never publish. Publish when the current local time
+        # is within this many minutes AT OR AFTER the configured time, guarded by
+        # a once-per-day marker so the window never double-posts.
+        window_minutes = 5
+
         published = 0
         async with session_scope() as session:
             tz_offset = int(await SettingsService(session).get("ui.timezone_offset_hours", 3))
             now_local = datetime.now(timezone.utc) + timedelta(hours=tz_offset)
-            hhmm = now_local.strftime("%H:%M")
+            today = now_local.strftime("%Y-%m-%d")
+            now_minutes = now_local.hour * 60 + now_local.minute
+
             cities = (
                 await session.scalars(
                     select(City).where(
                         City.is_active.is_(True),
                         City.weather_enabled.is_(True),
-                        City.weather_time == hhmm,
+                        City.weather_time.is_not(None),
                     )
                 )
             ).all()
             for city in cities:
-                published += await _publish_weather_for_city(session, city)
+                # Already posted today → skip (idempotent within the window).
+                if city.weather_last_published_on == today:
+                    continue
+                target = _parse_hhmm(city.weather_time)
+                if target is None:
+                    continue
+                # Fire when now is in [target, target + window]. Catches a missed
+                # exact minute without re-firing before the scheduled time.
+                if not (target <= now_minutes <= target + window_minutes):
+                    continue
+                sent = await _publish_weather_for_city(session, city)
+                # Mark the day as done even if there were no channels/forecast,
+                # so a misconfigured city is not retried every minute all day.
+                city.weather_last_published_on = today
+                published += sent
             await session.commit()
         return {"weather_posts": published}
 
     return run_async(_run())
+
+
+@celery_app.task(name="workers.tasks.publish_city_weather_now", bind=True, max_retries=1)
+def publish_city_weather_now(self, city_id: int) -> dict:  # type: ignore[no-untyped-def]
+    """Publish the weather post for one city immediately (manual test button).
+
+    Ignores the schedule and the once-per-day marker so an operator can verify
+    the forecast and channel wiring on demand.
+    """
+
+    async def _run() -> dict:
+        from shared.models.city import City
+
+        async with session_scope() as session:
+            city = await session.get(City, city_id)
+            if city is None:
+                return {"city_id": city_id, "error": "not_found", "sent": 0}
+            sent = await _publish_weather_for_city(session, city)
+            await session.commit()
+        return {"city_id": city_id, "sent": sent}
+
+    try:
+        return run_async(_run())
+    except Exception as exc:  # noqa: BLE001
+        log.error("weather_now_failed", city=city_id, error=str(exc))
+        raise self.retry(exc=exc, countdown=15) from exc

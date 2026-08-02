@@ -151,6 +151,23 @@ class PublisherService:
         # Author: show the author name unless it was explicitly hidden.
         author_name = "" if news.submitted_anonymously else (news.author_name or "")
 
+        # Resolve which watermark profile to use: the target channel's bound
+        # profile wins, else the default active one. Media is processed once and
+        # reused across channels, so for a multi-channel post the primary
+        # channel's watermark is applied. ``channels`` is ordered by the query;
+        # pick the one for the primary city first for a stable choice.
+        wm_profile = None
+        try:
+            from shared.models.watermark import WatermarkProfile as _WM
+
+            primary_channel = next(
+                (c for c in channels if c.city_id == news.city_id), channels[0]
+            )
+            if getattr(primary_channel, "watermark_id", None):
+                wm_profile = await self.session.get(_WM, primary_channel.watermark_id)
+        except Exception:  # noqa: BLE001 - never fail publish over watermark lookup
+            wm_profile = None
+
         # Process media (watermark) once.
         for asset in news.media:
             # Re-process when nothing was produced yet, or when a previous run
@@ -159,7 +176,9 @@ class PublisherService:
                 news.apply_watermark and asset.processed_path == asset.file_path
             )
             if needs_processing:
-                await self.media_service.process_asset(asset, apply_watermark=news.apply_watermark)
+                await self.media_service.process_asset(
+                    asset, apply_watermark=news.apply_watermark, profile=wm_profile
+                )
 
         # Load global tags from settings once per publish call.
         global_tags: list[dict] = []
