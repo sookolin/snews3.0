@@ -268,7 +268,6 @@ class TelegramAdminService:
                             style="success",
                             callback_data=f"mod:approve:{news.id}",
                         ),
-                        button("🌐 Во все каналы", callback_data=f"mod:all:{news.id}"),
                     ]
                 )
             rows.append(
@@ -300,7 +299,6 @@ class TelegramAdminService:
                         style="success",
                         callback_data=f"mod:now:{news.id}",
                     ),
-                    button("🌐 Во все каналы", callback_data=f"mod:all:{news.id}"),
                 ],
             ]
 
@@ -412,50 +410,23 @@ class TelegramAdminService:
         if moderator:
             info.append(f"👤 Обработал: {moderator}")
 
-        # Status tags, mirroring the admin panel.
+        # Status tags, mirroring the admin panel. Shown as the bold heading
+        # below, so it is NOT repeated inside the info block.
         tags = [STATUS_TAGS.get(news.status.value, news.status.value)]
         if news.is_edited:
             tags.append("✏️ изменено")
         status = " · ".join(tags)
-        info.append("Статус: " + status)
 
-        if template:
-            # Support both legacy plain-string and new JSON-per-status format.
-            import json as _json
-            resolved: str | None = None
-            if template.strip().startswith("{"):
-                try:
-                    tpl_map: dict = _json.loads(template)
-                    resolved = tpl_map.get(news.status.value) or None
-                except Exception:  # noqa: BLE001
-                    resolved = template  # fallback: treat whole string as template
-            else:
-                resolved = template
-
-            if resolved:
-                values = {
-                    "post": post,
-                    "id": str(news.id),
-                    "place": place,
-                    "city": city.name,
-                    "score": score,
-                    "source_time": fmt(news.source_published_at),
-                    "processed_at": fmt(news.processed_at),
-                    "moderator": moderator or "—",
-                    "reply_to": str(news.reply_to_news_id or ""),
-                    "status": status,
-                    "title": f"{emoji} {title}".strip(),
-                    "url": news.original_url or "",
-                    "source": source_name or "",
-                }
-                out = resolved
-                for key, value in values.items():
-                    out = out.replace("{" + key + "}", value)
-                # Drop lines whose only placeholder resolved to nothing.
-                lines = [ln for ln in out.split("\n") if ln.strip() not in ("", "—")]
-                return "\n".join(lines)
-
-        return f"{post}\n\n" + "\n".join(info)
+        # Fixed built-in layout (the moderation-card template setting was
+        # removed): a BOLD, UPPERCASE status heading on top, the post wrapped in
+        # a Telegram <blockquote>, then the metadata block.
+        status_heading = f"<b>{status.upper()}</b>"
+        quoted_post = f"<blockquote>{post}</blockquote>" if post.strip() else ""
+        parts = [status_heading]
+        if quoted_post:
+            parts.append(quoted_post)
+        parts.append("\n".join(info))
+        return "\n\n".join(p for p in parts if p.strip())
 
     async def send_moderation_card(
         self,

@@ -55,7 +55,22 @@ async def list_news(
     elif scope == "city":
         conditions.append(News.is_world_news.is_(False))
     if city_id:
-        conditions.append(News.city_id == city_id)
+        # Match the primary city OR any target city, so a multi-city post shows
+        # up under every city it publishes to — not only its moderation-owner
+        # city. Without the target-cities check, a shared regional item appeared
+        # only in the "all" tab.
+        from shared.models.news import news_target_cities
+
+        conditions.append(
+            or_(
+                News.city_id == city_id,
+                News.id.in_(
+                    select(news_target_cities.c.news_id).where(
+                        news_target_cities.c.city_id == city_id
+                    )
+                ),
+            )
+        )
     if source_id:
         conditions.append(News.source_id == source_id)
     if origin:
@@ -561,34 +576,6 @@ async def regenerate_news(
     await session.flush()
     await session.refresh(news)
     return _news_out(news)
-
-
-@router.post("/{news_id}/publish-all-cities", response_model=Message)
-async def publish_all_cities(
-    news_id: int,
-    session: DBSession,
-    meta: ClientMeta,
-    actor: User = Depends(require_permission(Permission.NEWS_PUBLISH)),
-) -> Message:
-    """Publish this single news item to the channels of every active city."""
-    news = await _get_news(session, news_id)
-    if news.published_message_ids:
-        from shared.exceptions import ValidationError
-
-        raise ValidationError("Новость уже опубликована — сначала снимите публикацию")
-
-    from workers.tasks import publish_news_all_cities as task
-
-    task.delay(news_id)
-    await AuditService(session).log(
-        "news.publish_all_cities",
-        user_id=actor.id,
-        actor=actor.email,
-        entity_type="news",
-        entity_id=news_id,
-        **meta,
-    )
-    return Message(detail="Публикация во все каналы поставлена в очередь")
 
 
 @router.post("/{news_id}/unpublish", response_model=NewsOut)

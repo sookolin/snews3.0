@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import useSWR from "swr";
-import { Copy, Globe, Save, Send, Trash2, Undo2 } from "lucide-react";
+import { Copy, Save, Send, Trash2, Undo2 } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
 import type { NewsItem, Page } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
@@ -211,25 +211,6 @@ export default function NewsEditorPage() {
       router.push("/news");
     } catch (e) {
       setError((e as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  /** Publish this single item to the channels of every active city. */
-  const publishAllCities = async () => {
-    if (!(await confirm({ message: "Опубликовать эту новость во все каналы всех городов?", danger: true }))) return;
-    setSaving(true);
-    try {
-      await save();
-      const r = await api<{ detail: string }>(`/news/${id}/publish-all-cities`, {
-        method: "POST",
-      });
-      toast.success(r.detail);
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-      toast.error((e as Error).message);
     } finally {
       setSaving(false);
     }
@@ -562,14 +543,6 @@ export default function NewsEditorPage() {
                     onClick={publish}
                   >
                     <Send className="h-4 w-4" />
-                  </button>
-                  <button
-                    className="btn-icon-primary h-9 w-9"
-                    title="Опубликовать во все каналы всех городов"
-                    disabled={saving}
-                    onClick={publishAllCities}
-                  >
-                    <Globe className="h-4 w-4" />
                   </button>
                 </>
               )}

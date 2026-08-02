@@ -60,68 +60,6 @@ const TAGS: { tag: string; desc: string }[] = [
 
 const HTML_TAGS = "<b>жирный</b> · <i>курсив</i> · <u>подчёркнутый</u> · <s>зачёркнутый</s> · <a href=\"URL\">ссылка</a> · <code>моно</code> · <tg-spoiler>спойлер</tg-spoiler>";
 
-const MOD_STATES = [
-  { key: "pending",   label: "⏳ Ожидает модерации", color: "text-amber-600 dark:text-amber-400" },
-  { key: "approved",  label: "✅ Одобрено",           color: "text-emerald-600 dark:text-emerald-400" },
-  { key: "published", label: "📢 Опубликовано",        color: "text-blue-600 dark:text-blue-400" },
-  { key: "withdrawn", label: "↩️ Снято",              color: "text-orange-600 dark:text-orange-400" },
-  { key: "rejected",  label: "❌ Отклонено",           color: "text-red-600 dark:text-red-400" },
-  { key: "failed",    label: "💥 Ошибка",              color: "text-gray-500 dark:text-gray-400" },
-] as const;
-
-type ModState = (typeof MOD_STATES)[number]["key"];
-
-const EMPTY_MOD: Record<ModState, string> = {
-  pending: "", approved: "", published: "", withdrawn: "", rejected: "", failed: "",
-};
-
-const MOD_KEYBOARD_PREVIEW: Record<string, string[][]> = {
-  pending: [
-    ["✅ Одобрить", "❌ Отклонить"],
-    ["✏️ Редактировать", "🗑 Удалить"],
-    ["⚡️ Опубликовать сразу", "🌐 Во все каналы"],
-  ],
-  approved: [
-    ["⚡️ Опубликовать сразу", "❌ Отклонить"],
-    ["✏️ Редактировать", "🗑 Удалить"],
-  ],
-  published: [
-    ["✏️ Редактировать"],
-    ["↩️ Снять с публикации"],
-    ["🗑 Удалить полностью"],
-  ],
-  withdrawn: [
-    ["✏️ Редактировать"],
-    ["📤 Опубликовать снова", "🌐 Во все каналы"],
-    ["🗑 Удалить полностью"],
-  ],
-  rejected: [
-    ["✅ Одобрить", "✏️ Редактировать"],
-    ["🗑 Удалить полностью"],
-  ],
-  failed: [
-    ["✅ Одобрить", "❌ Отклонить"],
-    ["✏️ Редактировать", "🗑 Удалить"],
-    ["⚡️ Опубликовать сразу", "🌐 Во все каналы"],
-  ],
-};
-
-const MOD_PLACEHOLDERS = [
-  ["{post}", "Текст новости (готовый)"],
-  ["{title}", "Заголовок"],
-  ["{id}", "ID новости"],
-  ["{place}", "Место (город + регион)"],
-  ["{city}", "Название города"],
-  ["{score}", "Релевантность (0–1)"],
-  ["{source}", "Название источника"],
-  ["{source_time}", "Время источника"],
-  ["{processed_at}", "Время обработки"],
-  ["{moderator}", "Кто модерирует"],
-  ["{reply_to}", "Reply to ID"],
-  ["{status}", "Статус новости"],
-  ["{url}", "Ссылка на оригинал"],
-];
-
 /** ---- Tags tab ---- */
 interface GlobalTag {
   key: string;
@@ -326,7 +264,7 @@ function TagsTab() {
 export default function TemplatesPage() {
   const { data, mutate } = useSWR<Page<Template>>("/templates?size=100", fetcher);
   const { data: settingsData } = useSWR<Record<string, unknown>>("/settings", fetcher);
-  const [activeTab, setActiveTab] = useState<"templates" | "moderation" | "tags">("templates");
+  const [activeTab, setActiveTab] = useState<"templates" | "tags">("templates");
   const [form, setForm] = useState<Partial<Template> | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -336,24 +274,8 @@ export default function TemplatesPage() {
   const [editingVar, setEditingVar] = useState<string | null>(null);
   const [editKey, setEditKey] = useState("");
   const [editVal, setEditVal] = useState("");
-  // Moderation card templates (one per status)
-  const [modTemplates, setModTemplates] = useState<Record<ModState, string>>({ ...EMPTY_MOD });
-  const [modSaving, setModSaving] = useState(false);
   const toast = useToast();
 
-  // Init moderation templates from settings
-  useEffect(() => {
-    if (!settingsData) return;
-    const raw = settingsData["moderation.card_template"];
-    if (typeof raw === "string" && raw.trim().startsWith("{")) {
-      try {
-        setModTemplates({ ...EMPTY_MOD, ...JSON.parse(raw) });
-        return;
-      } catch {}
-    }
-    // Legacy single-string value — leave all states empty
-    setModTemplates({ ...EMPTY_MOD });
-  }, [settingsData]);
 
   const openNew = () => { setForm({ ...EMPTY }); setPreview(null); setError(null); setEditingVar(null); };
   const openEdit = (t: Template) => { setForm({ ...t, variables: t.variables ?? {} }); setPreview(null); setError(null); setEditingVar(null); };
@@ -447,20 +369,6 @@ export default function TemplatesPage() {
     setEditingVar(null);
   };
 
-  const saveModTemplate = async () => {
-    setModSaving(true);
-    try {
-      await api(`/settings/${encodeURIComponent("moderation.card_template")}`, {
-        method: "PUT",
-        body: JSON.stringify({ value: JSON.stringify(modTemplates) }),
-      });
-      toast.success("Шаблоны карточки сохранены");
-    } catch (e) {
-      toast.error((e as Error).message);
-    } finally {
-      setModSaving(false);
-    }
-  };
 
   const TAB_CLASSES = (active: boolean) =>
     `px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
@@ -480,9 +388,6 @@ export default function TemplatesPage() {
       <div className="mb-5 flex gap-1 border-b border-border">
         <button className={TAB_CLASSES(activeTab === "templates")} onClick={() => setActiveTab("templates")}>
           Шаблоны публикаций
-        </button>
-        <button className={TAB_CLASSES(activeTab === "moderation")} onClick={() => setActiveTab("moderation")}>
-          Карточка модерации
         </button>
         <button className={TAB_CLASSES(activeTab === "tags")} onClick={() => setActiveTab("tags")}>
           Теги
@@ -520,83 +425,6 @@ export default function TemplatesPage() {
           </div>
         ))}
         {data && data.items.length === 0 && <p className="text-muted-foreground">Шаблонов нет. Создайте первый.</p>}
-        </div>
-      )}
-
-      {activeTab === "moderation" && (
-        <div className="space-y-5">
-          {/* Placeholder reference */}
-          <div className="rounded-md bg-blue-50 p-3 text-xs text-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
-            <div className="mb-2 font-semibold">Плейсхолдеры (одинаковы для всех состояний):</div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
-              {MOD_PLACEHOLDERS.map(([tag, desc]) => (
-                <div key={tag}><span className="font-mono font-semibold">{tag}</span> — {desc}</div>
-              ))}
-            </div>
-            <div className="mt-2 text-muted-foreground">Пусто — встроенный формат карточки для этого состояния.</div>
-          </div>
-
-          {/* Cards in 2x2 grid */}
-          <div className="grid gap-4 md:grid-cols-2">
-            {MOD_STATES.map(({ key, label, color }) => (
-              <div key={key} className="card">
-                <div className="flex items-center gap-2 border-b border-border px-5 py-3">
-                  <span className={`text-sm font-semibold ${color}`}>{label}</span>
-                </div>
-                <div className="p-5 space-y-3">
-                  <div className="flex items-start gap-1">
-                    <textarea
-                      id={`mod-tpl-${key}`}
-                      className="input min-h-[140px] flex-1 font-mono text-xs"
-                      placeholder={`Шаблон для статуса «${label}». Пусто — встроенный вид.`}
-                      value={modTemplates[key]}
-                      onChange={(e) =>
-                        setModTemplates((t) => ({ ...t, [key]: e.target.value }))
-                      }
-                    />
-                    <EmojiPickerButton
-                      onPick={(em) => {
-                        const el = document.getElementById(`mod-tpl-${key}`) as HTMLTextAreaElement | null;
-                        setModTemplates((t) => {
-                          const cur = t[key] ?? "";
-                          if (!el) return { ...t, [key]: cur + em };
-                          const s = el.selectionStart, e2 = el.selectionEnd;
-                          const next = cur.slice(0, s) + em + cur.slice(e2);
-                          setTimeout(() => { el.selectionStart = el.selectionEnd = s + em.length; el.focus(); }, 0);
-                          return { ...t, [key]: next };
-                        });
-                      }}
-                    />
-                  </div>
-
-                  {/* Button keyboard preview */}
-                  <div>
-                    <div className="mb-1 text-xs text-muted-foreground font-medium">Кнопки модерации для этого состояния:</div>
-                    <div className="space-y-1">
-                      {(MOD_KEYBOARD_PREVIEW[key] ?? []).map((row, ri) => (
-                        <div key={ri} className="flex flex-wrap gap-1">
-                          {row.map((btn) => (
-                            <span
-                              key={btn}
-                              className="inline-block rounded border border-border bg-muted px-2.5 py-1 text-xs"
-                            >
-                              {btn}
-                            </span>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="flex justify-end">
-            <button className="btn-primary" disabled={modSaving} onClick={saveModTemplate}>
-              {modSaving ? "Сохранение…" : "Сохранить все шаблоны"}
-            </button>
-          </div>
         </div>
       )}
 

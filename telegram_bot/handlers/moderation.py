@@ -56,8 +56,6 @@ async def handle_moderation(callback: CallbackQuery) -> None:
         await _approve(callback, news_id, lang)
     elif action == "now":
         await _approve(callback, news_id, lang, immediately=True)
-    elif action == "all":
-        await _approve(callback, news_id, lang, all_cities=True)
     elif action == "reject":
         await _reject(callback, news_id, lang)
     elif action == "spoiler":

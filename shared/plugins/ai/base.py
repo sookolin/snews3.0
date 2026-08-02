@@ -62,7 +62,10 @@ class BaseAIProvider(abc.ABC):
         return (
             f"{header}Текст новости:\n{text}\n\n"
             "Требования: заголовок верни обычным текстом БЕЗ HTML-тегов и без эмодзи в начале. "
-            "В тексте можно использовать теги <b>, <i>, <a>." + emoji_rule + "\n"
+            "В тексте можно использовать теги <b>, <i>, <a> ТОЛЬКО для выделения отдельных "
+            "слов внутри предложений. НЕ дублируй заголовок в тексте и НЕ делай первое "
+            "предложение жирным или отдельным заголовком-абзацем — текст должен начинаться "
+            "обычным повествованием." + emoji_rule + "\n"
             'Верни строго JSON вида {"title": "...", "text": "...", "emoji": "..."} без пояснений.'
         )
 
@@ -81,14 +84,38 @@ class BaseAIProvider(abc.ABC):
         try:
             data = json.loads(cleaned)
             emoji = str(data.get("emoji") or "").strip() or None
+            title = str(data.get("title") or fallback_title or "").strip()
+            body = str(data.get("text") or fallback_text).strip()
             return AIResult(
-                title=str(data.get("title") or fallback_title or "").strip(),
-                text=str(data.get("text") or fallback_text).strip(),
+                title=title,
+                text=BaseAIProvider._strip_lead_heading(body, title),
                 emoji=emoji,
             )
         except (json.JSONDecodeError, AttributeError):
             # Model returned plain text — use it as the body.
             return AIResult(title=fallback_title or "", text=raw.strip() or fallback_text)
+
+    @staticmethod
+    def _strip_lead_heading(text: str, title: str) -> str:
+        """Remove a bold lead sentence the model may add as a pseudo-heading.
+
+        Some models start the body with a fully-bold first line (often the title
+        again), which renders as a duplicate heading above the real title. We
+        strip a leading ``<b>…</b>`` line, especially when it echoes the title.
+        """
+        import re
+
+        stripped = text.lstrip()
+        # A leading line that is entirely wrapped in <b>…</b> (optionally with a
+        # trailing period) — drop it and any blank line right after.
+        m = re.match(r"^<b>\s*(.+?)\s*</b>\s*[.:]?\s*(?:\n+|$)", stripped, re.IGNORECASE | re.DOTALL)
+        if m:
+            lead = re.sub(r"<[^>]+>", "", m.group(1)).strip().rstrip(".").lower()
+            title_norm = re.sub(r"<[^>]+>", "", title or "").strip().rstrip(".").lower()
+            # Drop when it echoes the title, or is a short standalone heading.
+            if not title_norm or lead == title_norm or len(lead) <= 120:
+                return stripped[m.end():].lstrip()
+        return text
 
     @abc.abstractmethod
     async def process(self, title: str | None, text: str) -> AIResult:

@@ -136,6 +136,25 @@ class CityMatcher:
             )
         return best
 
+    def match_all(self, text: str, title: str | None = None, min_score: float = 0.3) -> list[MatchResult]:
+        """Every city whose keyword score meets ``min_score``, best first.
+
+        Unlike :meth:`match` (single best city), this supports an item that is
+        relevant to several monitored cities at once (e.g. a story naming two of
+        them), so the pipeline can target exactly those cities.
+        """
+        blob = f"{title or ''}\n{text}"
+        tokens = _lemmatize_tokens(blob)
+        lowered = blob.lower()
+
+        results: list[MatchResult] = []
+        for city in self.cities:
+            score, matched = self._score_city(city, tokens, lowered)
+            if score >= min_score:
+                results.append(MatchResult(city, score, matched))
+        results.sort(key=lambda r: r.score, reverse=True)
+        return results
+
     def _score_city(self, city: City, tokens: set[str], lowered: str) -> tuple[float, list[str]]:
         # Exclusions veto the city entirely.
         for excl in city.exclude_keywords:

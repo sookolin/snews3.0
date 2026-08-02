@@ -116,6 +116,28 @@ def _mentions_region(title: str | None, text: str, regions: set[str]) -> bool:
     return False
 
 
+#: Phrases indicating a country-wide (federal) Russian story. Kept narrow so a
+#: passing mention of "россия" in unrelated foreign news does not qualify.
+_RUSSIA_MARKERS = (
+    " в россии", " россии", " россия", " рф ", " по стране",
+    "правительство рф", "госдума", "совфед", "минфин", "минцифры",
+    "минздрав", "мвд россии", "цб рф", "центробанк", "путин", "президент россии",
+    "федеральн", "по всей стране", "общероссийск", "россиян",
+)
+
+
+def _is_russia(country: str | None) -> bool:
+    """True when a city's ``country`` names Russia (ru/россия/russia)."""
+    c = (country or "").strip().lower()
+    return c in {"россия", "russia", "ru", "рф", "российская федерация"}
+
+
+def _mentions_russia(title: str | None, text: str) -> bool:
+    """True if the text reads as a Russia-wide/federal story."""
+    blob = f" {title or ''} {text[:2000]} ".lower()
+    return any(marker in blob for marker in _RUSSIA_MARKERS)
+
+
 @dataclass
 class IngestReport:
     source_id: int
@@ -299,40 +321,43 @@ class IngestionPipeline:
             return []
 
         if linked_cities:
-            # Editorial binding is authoritative. But if the text clearly names
-            # ONE of the linked cities (keyword match), the item is about that
-            # city specifically → target only it. Otherwise it is general
-            # regional news → target ALL linked cities as a single News.
-            specific = matcher.match(item.text, item.title)
-            if (
-                specific.city
-                and specific.score >= min_score
-                and specific.city.id in {c.id for c in linked_cities}
-            ):
-                target_cities: list[City] = [specific.city]
-                match_score = specific.score
-                matched_keywords: list[str] = specific.matched_keywords or []
-            else:
-                # No specific city named. Only keep it as region-wide news if
-                # the text actually mentions the region (e.g. "Московская
-                # область"/"Подмосковье") or is genuinely world/federal news.
-                # Otherwise it is unrelated (e.g. a federal ОСАГО note) and is
-                # DROPPED rather than fanned out to every linked city.
-                #
-                # Region names come from the cities' ``region`` field and, as a
-                # fallback, from any known region name found in the source name
-                # (e.g. «Московская область сегодня»). This way the filter works
-                # even when the operator did not fill in each city's region.
-                regions = {c.region for c in linked_cities if c.region}
-                regions |= _regions_in_text(source.name)
-                if not (
-                    is_world or _mentions_region(item.title, item.text, regions)
-                ):
-                    report.unmatched += 1
-                    return []
-                target_cities = linked_cities
+            # Relevance is decided strictly, in this order:
+            #   1. The text matches one or more linked cities by their KEYWORDS
+            #      → target exactly those cities (one, two, … — never the rest).
+            #   2. No specific city, but the text mentions the REGION/oblast
+            #      → region-wide news → target ALL linked cities.
+            #   3. No city and no region, but it is a Russia-wide/federal story
+            #      AND the linked cities are in Russia → target ALL linked cities.
+            #   4. Otherwise the item is unrelated (e.g. news about a city we do
+            #      not monitor, like Омск) → DROPPED.
+            linked_matcher = CityMatcher(linked_cities)
+            hits = linked_matcher.match_all(item.text, item.title, min_score)
+
+            regions = {c.region for c in linked_cities if c.region}
+            regions |= _regions_in_text(source.name)
+            mentions_region = _mentions_region(item.title, item.text, regions)
+            in_russia = any(_is_russia(c.country) for c in linked_cities)
+            federal = is_world or (in_russia and _mentions_russia(item.title, item.text))
+
+            if hits:
+                # Specific city/cities named → target precisely those.
+                target_cities = [h.city for h in hits]
+                match_score = hits[0].score
+                matched_keywords: list[str] = hits[0].matched_keywords or []
+            elif mentions_region:
+                # Region-wide (e.g. "Московская область"/"Подмосковье").
+                target_cities = list(linked_cities)
                 match_score = 1.0
                 matched_keywords = []
+            elif federal:
+                # Federal / country-wide news relevant to all monitored RF cities.
+                target_cities = list(linked_cities)
+                match_score = 0.5
+                matched_keywords = []
+            else:
+                # Names no monitored city, not regional, not federal → drop.
+                report.unmatched += 1
+                return []
         else:
             # No city binding — fall back to keyword matching.
             match = matcher.match(item.text, item.title)
@@ -463,13 +488,25 @@ class IngestionPipeline:
         ).all()
 
         blob = f"{item.title or ''} {item.text}"
+        # Threading needs enough text to compare reliably. Short or media-only
+        # posts (e.g. the "📷 Медиа-публикация" placeholder, one-line captions)
+        # produced false matches that chained every new post as a reply to the
+        # same earlier message. Require a meaningful length before threading.
+        if len((item.text or "").strip()) < 200:
+            return None
+
         best_id: int | None = None
         best_score = 0.0
         for other in candidates:
-            other_blob = f"{other.original_title or ''} {other.original_text or ''}"
+            other_text = (other.original_text or "").strip()
+            if len(other_text) < 200:
+                continue  # cannot reliably compare against a stub
+            other_blob = f"{other.original_title or ''} {other_text}"
             score = similarity_ratio(blob, other_blob)
-            # Related but not duplicate: 0.55–0.85 similarity band.
-            if 0.55 <= score < 0.85 and score > best_score:
+            # Related but not duplicate: a NARROW band. Widening it made unrelated
+            # short posts look like follow-ups; 0.62–0.82 keeps only genuine
+            # continuations of the same story.
+            if 0.62 <= score < 0.82 and score > best_score:
                 best_score = score
                 best_id = other.id
         if best_id is not None:
