@@ -143,6 +143,53 @@ async def login_telegram(payload: TelegramLoginRequest, session: DBSession) -> T
 
 
 
+class TelegramOidcRequest(BaseModel):
+    """Signed OIDC ``id_token`` from the Telegram Login library."""
+
+    id_token: str
+
+
+@router.post("/telegram/oidc", response_model=TokenPair, dependencies=[Depends(rate_limiter)])
+async def login_telegram_oidc(payload: TelegramOidcRequest, session: DBSession) -> TokenPair:
+    """Authenticate via the new Telegram Login (OIDC) ``id_token``.
+
+    The token is a signed JWT verified against Telegram's JWKS; ``aud`` must
+    match our bot Client ID. The Telegram account must already be linked to a
+    user (``users.telegram_id``).
+    """
+    from shared.config import settings
+    from shared.services.telegram_oidc import validate_id_token
+
+    client_id = settings.telegram_client_id or 8975133163
+    claims = validate_id_token(payload.id_token, client_id)
+    if not claims:
+        raise AuthenticationError("Неверный токен Telegram", code="telegram_bad_signature")
+
+    tg_id = claims.get("id") or claims.get("sub")
+    if not tg_id:
+        raise AuthenticationError("Telegram не вернул идентификатор", code="telegram_no_id")
+
+    service = UserService(session)
+    user = await service.get_by_telegram_id(int(tg_id))
+    if user is None or not user.is_active:
+        raise AuthenticationError(
+            "Этот Telegram-аккаунт не привязан к пользователю", code="telegram_not_linked"
+        )
+
+    picture = claims.get("picture")
+    if picture:
+        user.photo_url = picture
+    username = claims.get("preferred_username")
+    if username and not user.telegram_username:
+        user.telegram_username = username
+
+    await _after_login(session, user)
+    return TokenPair(
+        access_token=create_access_token(user.id, {"role": user.role.value}),
+        refresh_token=create_refresh_token(user.id),
+    )
+
+
 class WebAppLoginRequest(BaseModel):
     """Raw ``initData`` string from a Telegram Mini App (WebApp)."""
 

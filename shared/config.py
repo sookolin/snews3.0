@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     telegram_moderation_group_id: int = 0
     telegram_webhook_url: str = ""
     admin_panel_url: str = "http://localhost:3000"
+    #: Bot Client ID for the new Telegram Login (OIDC) library. From @BotFather
+    #: → Bot Settings → Web Login. Used as the expected ``aud`` of ``id_token``.
+    telegram_client_id: int = 0
 
     # AI
     default_ai_provider: str = "anthropic"

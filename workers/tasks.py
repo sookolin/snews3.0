@@ -509,13 +509,23 @@ def _parse_hhmm(value: str | None) -> int | None:
     return h * 60 + m
 
 
-async def _render_weather(session, city, body: str) -> str:
-    """Render the weather body through the city template (fallback: plain)."""
+async def _render_weather(session, city, channel, body: str) -> str:
+    """Render the weather body through the template bound to this channel/city.
+
+    Uses the SAME precedence as normal publishing so the weather post looks like
+    every other post of the city:
+        channel.template_id → city.template_id → default → any.
+    Also passes ``link`` = the channel's public t.me link, so a ``{link}``
+    hyperlink in the template's footer actually resolves.
+    """
     from shared.models.template import Template
+    from shared.services.publisher_service import channel_subscribe_link
     from shared.services.template_renderer import TemplateRenderer
 
     template = None
-    if getattr(city, "template_id", None):
+    if getattr(channel, "template_id", None):
+        template = await session.get(Template, channel.template_id)
+    if template is None and getattr(city, "template_id", None):
         template = await session.get(Template, city.template_id)
     if template is None:
         template = await session.scalar(
@@ -530,6 +540,7 @@ async def _render_weather(session, city, body: str) -> str:
         title=f"Погода в городе {city.name}",
         text=body,
         city=city.name,
+        link=channel_subscribe_link(channel),
     )
 
 async def _publish_weather_for_city(session, city) -> int:
@@ -560,9 +571,6 @@ async def _publish_weather_for_city(session, city) -> int:
     if not body.strip():
         body = weather_service.format_post(city.name, forecast, from_hour=0)
 
-    # Render through the city's bound template (falls back to default).
-    text = await _render_weather(session, city, body)
-
     channels = (
         await session.scalars(
             select(Channel).where(Channel.city_id == city.id, Channel.is_active.is_(True))
@@ -571,6 +579,8 @@ async def _publish_weather_for_city(session, city) -> int:
     publisher_cls = publisher_registry.get("telegram")
     sent = 0
     for channel in channels:
+        # Render per channel so each uses its bound template and its own {link}.
+        text = await _render_weather(session, city, channel, body)
         try:
             result = await publisher_cls(channel).publish(PublishRequest(text=text))
             if result.success:

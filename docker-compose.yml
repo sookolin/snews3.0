@@ -79,6 +79,7 @@ services:
         API_PROXY_TARGET: http://backend:8000
         NEXT_PUBLIC_YANDEX_MAPS_KEY: ${NEXT_PUBLIC_YANDEX_MAPS_KEY:-}
         NEXT_PUBLIC_TELEGRAM_BOT_USERNAME: ${NEXT_PUBLIC_TELEGRAM_BOT_USERNAME:-}
+        NEXT_PUBLIC_TELEGRAM_CLIENT_ID: ${NEXT_PUBLIC_TELEGRAM_CLIENT_ID:-}
     restart: unless-stopped
     environment:
       # Server-side rewrite target: reach the backend over the compose network.
@@ -86,6 +87,7 @@ services:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
       NEXT_PUBLIC_YANDEX_MAPS_KEY: ${NEXT_PUBLIC_YANDEX_MAPS_KEY:-}
       NEXT_PUBLIC_TELEGRAM_BOT_USERNAME: ${NEXT_PUBLIC_TELEGRAM_BOT_USERNAME:-}
+      NEXT_PUBLIC_TELEGRAM_CLIENT_ID: ${NEXT_PUBLIC_TELEGRAM_CLIENT_ID:-}
     depends_on:
       - backend
     ports:

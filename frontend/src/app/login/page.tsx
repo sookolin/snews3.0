@@ -3,7 +3,21 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { login, setTokens } from "@/lib/api";
-import { Image as ImageIcon } from "lucide-react";
+import { Image as ImageIcon, Send } from "lucide-react";
+
+/** Minimal shape of the Telegram OIDC login library we use. */
+interface TgAuthResult {
+  id_token?: string;
+  user?: unknown;
+  error?: string;
+}
+interface TgLogin {
+  auth: (
+    opts: { client_id: number; scope?: string[]; lang?: string; nonce?: string },
+    cb: (data: TgAuthResult | null) => void
+  ) => void;
+  open?: (cb: (data: TgAuthResult | null) => void) => void;
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -54,55 +68,51 @@ export default function LoginPage() {
     router.push("/dashboard");
   };
 
+  /** Bot Client ID from @BotFather (Bot Settings → Web Login). */
+  const clientId = Number(process.env.NEXT_PUBLIC_TELEGRAM_CLIENT_ID || "8975133163");
+
   /**
-   * Telegram Login Widget.
+   * Telegram Login (new OIDC library).
    *
-   * The widget needs the bot username and a domain authorised in BotFather
-   * (``/setdomain``). It calls ``window.onTelegramAuth`` with signed user data,
-   * which we forward to the backend for HMAC verification.
+   * Loads ``oauth.telegram.org/js/telegram-login.js`` and opens the login popup
+   * on demand. The callback returns an ``id_token`` (signed JWT) which we send
+   * to the backend for verification. The site origin must be registered under
+   * @BotFather → Bot Settings → Web Login → Allowed URLs.
    */
   const loginTelegram = () => {
-    // Username without a leading @ — Telegram rejects "@name".
-    const botUser = (process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || "").replace(/^@/, "").trim();
-    if (!botUser) {
-      setError("Не задан NEXT_PUBLIC_TELEGRAM_BOT_USERNAME (см. docs/AUTH.md)");
+    const TL = (window as unknown as { Telegram?: { Login?: TgLogin } }).Telegram?.Login;
+    if (!TL) {
+      setError("Telegram-логин ещё загружается, попробуйте ещё раз через секунду.");
       return;
     }
-    const container = document.getElementById("tg-login-widget");
-    if (!container) return;
-    if (container.childElementCount > 0) return;
-    // Inject the official widget button; it handles the popup itself.
-    // NOTE: Telegram shows "Bot domain invalid" here until the current site
-    // domain is registered for the bot in @BotFather via /setdomain.
-    const s = document.createElement("script");
-    s.async = true;
-    s.src = "https://telegram.org/js/telegram-widget.js?22";
-    s.setAttribute("data-telegram-login", botUser);
-    s.setAttribute("data-size", "large");
-    s.setAttribute("data-userpic", "false");
-    s.setAttribute("data-request-access", "write");
-    s.setAttribute("data-onauth", "onTelegramAuth(user)");
-    container.appendChild(s);
+    setError(null);
+    TL.auth({ client_id: clientId, scope: ["profile", "write"] }, (data) => {
+      if (!data) {
+        setError("Вход через Telegram отменён");
+        return;
+      }
+      if (data.error) {
+        setError(`Telegram: ${data.error}`);
+        return;
+      }
+      if (data.id_token) exchange("telegram/oidc", { id_token: data.id_token });
+      else setError("Telegram не вернул токен");
+    });
   };
 
-  // Handle OAuth redirects (Yandex/VK) and expose the Telegram callback.
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // Telegram widget calls this global with the signed user object.
-    (window as unknown as { onTelegramAuth?: (u: unknown) => void }).onTelegramAuth = (user) => {
-      if (user) exchange("telegram", user);
-      else setError("Вход через Telegram отменён");
-    };
+    setDiag({ host: window.location.hostname, bot: String(clientId) });
 
-    // Record what the widget will use, so a domain/username mismatch is visible.
-    setDiag({
-      host: window.location.hostname,
-      bot: (process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || "").replace(/^@/, "").trim(),
-    });
-
-    // Auto-embed the official Telegram Login Widget button on mount.
-    loginTelegram();
+    // Load the OIDC login library once.
+    if (!document.getElementById("tg-oidc-script")) {
+      const s = document.createElement("script");
+      s.id = "tg-oidc-script";
+      s.async = true;
+      s.src = "https://oauth.telegram.org/js/telegram-login.js?5";
+      document.head.appendChild(s);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -154,18 +164,23 @@ export default function LoginPage() {
         </div>
 
         {/* Official Telegram Login Widget button. */}
-        <div id="tg-login-widget" className="flex justify-center" />
+        <button
+          type="button"
+          className="btn-outline flex w-full items-center justify-center gap-2"
+          onClick={loginTelegram}
+        >
+          <Send className="h-4 w-4" /> Войти через Telegram
+        </button>
         <p className="text-center text-[11px] text-muted-foreground">
           Аккаунт должен быть привязан администратором по Telegram.
         </p>
         <p className="text-center text-[11px] text-muted-foreground/70">
-          Если вместо кнопки — «Bot domain invalid»: в @BotFather → /setdomain укажите
-          <b> только домен</b> (без https:// и без /login).
+          Origin этого сайта должен быть в @BotFather → Bot Settings → Web Login →
+          Allowed URLs.
         </p>
         {diag && (
           <p className="text-center text-[10px] text-muted-foreground/60">
-            Домен для /setdomain: <b>{diag.host || "—"}</b> · бот:{" "}
-            <b>{diag.bot ? "@" + diag.bot : "не задан"}</b>
+            Origin: <b>https://{diag.host || "—"}</b> · client_id: <b>{diag.bot}</b>
           </p>
         )}
       </form>
