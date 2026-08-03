@@ -86,6 +86,22 @@ export const STATUS_LABELS: Record<string, string> = Object.fromEntries(
   Object.entries(STATUS_META).map(([key, meta]) => [key, meta.label])
 );
 
+/**
+ * Subtle row-background tint per status, matching the status tag's colour but
+ * much more transparent so the row is easy to scan without shouting. ``pending``
+ * ("на модерации") intentionally has NO tint — it is the neutral default state.
+ */
+export const STATUS_ROW_TINT: Record<string, string> = {
+  processing: "bg-blue-500/5 hover:bg-blue-500/10",
+  pending: "",
+  approved: "bg-emerald-500/5 hover:bg-emerald-500/10",
+  scheduled: "bg-violet-500/5 hover:bg-violet-500/10",
+  published: "bg-green-500/10 hover:bg-green-500/15",
+  withdrawn: "bg-orange-500/5 hover:bg-orange-500/10",
+  rejected: "bg-rose-500/5 hover:bg-rose-500/10",
+  failed: "bg-rose-500/10 hover:bg-rose-500/15",
+};
+
 /** Compact status pill: coloured icon + label. */
 export function StatusBadge({ status }: { status: string }) {
   const meta = STATUS_META[status];

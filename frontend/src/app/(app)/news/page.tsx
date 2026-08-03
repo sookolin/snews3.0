@@ -2,11 +2,11 @@
 
 import { Fragment, useState, useEffect } from "react";
 import useSWR from "swr";
-import { CalendarClock, Check, ChevronDown, ChevronRight, Pencil, RefreshCw, Trash2, Undo2, X } from "lucide-react";
+import { CalendarClock, Check, ChevronDown, ChevronRight, Eye, EyeOff, Pencil, RefreshCw, Trash2, Undo2, X } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
 import type { City, NewsItem, Page, Source, User } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
-import { StatusBadge, StateTag, STATUS_LABELS, STATUS_ORDER } from "@/components/StatusBadge";
+import { StatusBadge, StateTag, STATUS_LABELS, STATUS_ORDER, STATUS_ROW_TINT } from "@/components/StatusBadge";
 import { RoleTag } from "@/components/RoleTag";
 import { MediaHoverPreview } from "@/components/MediaHoverPreview";
 import { Pagination } from "@/components/Pagination";
@@ -49,27 +49,43 @@ export default function NewsPage() {
   const [scheduling, setScheduling] = useState<NewsItem | null>(null);
   const [scheduleAt, setScheduleAt] = useState("");
   const [error, setError] = useState<string | null>(null);
+  //: When on, every row shows its news text inline (no click needed).
+  const [alwaysText, setAlwaysText] = useState(false);
+  useEffect(() => {
+    setAlwaysText(localStorage.getItem("snews.news.always_text") === "1");
+  }, []);
+  const toggleAlwaysText = () => {
+    setAlwaysText((v) => {
+      const next = !v;
+      localStorage.setItem("snews.news.always_text", next ? "1" : "0");
+      return next;
+    });
+  };
   //: Ids of rows expanded to preview their main text inline.
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   //: Lazily-loaded main text per news id (fetched when a row is expanded).
   const [previews, setPreviews] = useState<Record<number, string>>({});
+  const loadPreview = async (id: number) => {
+    if (previews[id] !== undefined) return;
+    // Mark as loading to avoid duplicate concurrent fetches.
+    setPreviews((p) => (p[id] === undefined ? { ...p, [id]: "…" } : p));
+    try {
+      const n = await api<{ text?: string; original_text?: string }>(`/news/${id}`);
+      const raw = n.text || n.original_text || "—";
+      // Strip HTML tags for a plain-text preview.
+      const plain = raw.replace(/<[^>]*>/g, "").trim() || "—";
+      setPreviews((p) => ({ ...p, [id]: plain }));
+    } catch {
+      setPreviews((p) => ({ ...p, [id]: "Не удалось загрузить текст" }));
+    }
+  };
   const toggleExpanded = async (id: number) => {
     setExpanded((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
-    if (previews[id] === undefined) {
-      try {
-        const n = await api<{ text?: string; original_text?: string }>(`/news/${id}`);
-        const raw = n.text || n.original_text || "—";
-        // Strip HTML tags for a plain-text preview.
-        const plain = raw.replace(/<[^>]*>/g, "").trim() || "—";
-        setPreviews((p) => ({ ...p, [id]: plain }));
-      } catch {
-        setPreviews((p) => ({ ...p, [id]: "Не удалось загрузить текст" }));
-      }
-    }
+    void loadPreview(id);
   };
 
   const { data: cities } = useSWR<Page<City>>("/cities?size=200", fetcher);
@@ -222,6 +238,13 @@ export default function NewsPage() {
   const allSelected = items.length > 0 && selected.length === items.length;
   const toggleAll = () => setSelected(allSelected ? [] : items.map((n) => n.id));
 
+  // When "always show text" is on, preload the text of every visible row.
+  useEffect(() => {
+    if (!alwaysText) return;
+    for (const n of items) void loadPreview(n.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alwaysText, data]);
+
   const switchTab = (key: string) => {
     setTabKey(key);
     localStorage.setItem("snews.news.active_tab", key);
@@ -241,6 +264,17 @@ export default function NewsPage() {
                 <Trash2 className="h-4 w-4" /> Удалить выбранные ({selected.length})
               </button>
             )}
+            <button
+              className={alwaysText ? "btn-primary" : "btn-outline"}
+              onClick={toggleAlwaysText}
+              title={
+                alwaysText
+                  ? "Текст показывается для всех новостей. Нажмите, чтобы скрыть."
+                  : "Показывать текст всех новостей в таблице (иначе — по клику на строку)."
+              }
+            >
+              {alwaysText ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />} Текст
+            </button>
             <button
               className="btn-outline"
               onClick={() => mutate()}
@@ -368,9 +402,11 @@ export default function NewsPage() {
                   </td>
                 </tr>
               )}
-              {items.map((n) => (
+              {items.map((n) => {
+                const showText = alwaysText || expanded.has(n.id);
+                return (
                 <Fragment key={n.id}>
-                <tr className="border-t border-border">
+                <tr className={`border-t border-border ${STATUS_ROW_TINT[n.status] ?? ""}`}>
                   <td className="px-3 py-3">
                     <Checkbox
                       checked={selected.includes(n.id)}
@@ -382,11 +418,16 @@ export default function NewsPage() {
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        title={expanded.has(n.id) ? "Свернуть текст" : "Показать текст"}
-                        className="shrink-0 text-muted-foreground hover:text-foreground"
+                        title={
+                          alwaysText
+                            ? "Текст показан для всех (переключатель «Текст» вверху)"
+                            : showText ? "Свернуть текст" : "Показать текст"
+                        }
+                        className="shrink-0 text-muted-foreground hover:text-foreground disabled:opacity-40"
                         onClick={() => toggleExpanded(n.id)}
+                        disabled={alwaysText}
                       >
-                        {expanded.has(n.id) ? (
+                        {showText ? (
                           <ChevronDown className="h-4 w-4" />
                         ) : (
                           <ChevronRight className="h-4 w-4" />
@@ -484,8 +525,8 @@ export default function NewsPage() {
                     </div>
                   </td>
                 </tr>
-                {expanded.has(n.id) && (
-                  <tr className="border-t border-border bg-muted/30">
+                {showText && (
+                  <tr className={`border-t border-border ${STATUS_ROW_TINT[n.status] ?? "bg-muted/30"}`}>
                     <td />
                     <td colSpan={8} className="px-4 py-3">
                       <div className="whitespace-pre-wrap text-sm text-muted-foreground">
@@ -495,7 +536,8 @@ export default function NewsPage() {
                   </tr>
                 )}
                 </Fragment>
-              ))}
+                );
+              })}
               {data && items.length === 0 && (
                 <tr>
                   <td colSpan={9} className="px-4 py-6 text-center text-muted-foreground">

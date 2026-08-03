@@ -31,6 +31,7 @@ from shared.services.dedup import DedupConfig, DedupService
 from shared.services.emoji_guess import guess_emoji
 from shared.services.matcher import CityMatcher
 from shared.services.media_service import MediaService
+from shared.services.ru_cities import mentions_unmonitored_city
 from shared.services.settings_service import SettingsService
 
 log = get_logger("pipeline")
@@ -162,6 +163,9 @@ class IngestionPipeline:
         #: World markers in effect for the current run (built-ins + «другие»
         #: keywords). Loaded per run in :meth:`process_source`.
         self._world_markers: tuple[str, ...] = _WORLD_MARKERS
+        #: Lemma set of every monitored city's name/keywords. A federal story
+        #: naming a RU city outside this set is dropped. Loaded per run.
+        self._monitored_tokens: set[str] = set()
 
     async def _dedup_config(self) -> DedupConfig:
         cfg = await self.settings_service.get_many("dedup.")
@@ -218,6 +222,7 @@ class IngestionPipeline:
                 if kw
             )
         self._world_markers = _WORLD_MARKERS + extra_markers
+        self._monitored_tokens = await self._build_monitored_tokens()
         dedup = DedupService(self.session, await self._dedup_config())
 
         # Real-time mode: only ingest genuinely fresh publications. Without this
@@ -270,6 +275,26 @@ class IngestionPipeline:
             select(City).where(City.is_active.is_(True), City.kind == "city")
         )
         return list(result.all())
+
+    async def _build_monitored_tokens(self) -> set[str]:
+        """Lemma set of every monitored city's name + keywords.
+
+        Used to decide whether a federal story names a city we DON'T monitor:
+        any RU-city lemma present in an item but absent from this set marks the
+        item as being about another place.
+        """
+        from shared.services.matcher import _lemma
+
+        cities = await self._all_active_cities()
+        tokens: set[str] = set()
+        for city in cities:
+            words = [city.name, *(city.keywords or []), *(city.extra_keywords or [])]
+            for word in words:
+                for part in str(word).lower().split():
+                    lemma = _lemma(part)
+                    if lemma:
+                        tokens.add(lemma)
+        return tokens
 
     async def _world_bucket(self) -> City | None:
         """The entry world / unmatched news belong to.
@@ -350,7 +375,15 @@ class IngestionPipeline:
                 match_score = 1.0
                 matched_keywords = []
             elif federal:
-                # Federal / country-wide news relevant to all monitored RF cities.
+                # Federal / country-wide news relevant to all monitored RF cities
+                # — UNLESS it also names a specific city we do not monitor. Such
+                # an item is really about that other place and must be dropped
+                # entirely (not shown anywhere), even though it mentions Russia.
+                if mentions_unmonitored_city(
+                    item.title, item.text, self._monitored_tokens
+                ):
+                    report.unmatched += 1
+                    return []
                 target_cities = list(linked_cities)
                 match_score = 0.5
                 matched_keywords = []
@@ -373,6 +406,13 @@ class IngestionPipeline:
                 # from leaking into the world bucket just because it matched no
                 # monitored city.
                 if not (self._world_news_enabled and is_world):
+                    report.unmatched += 1
+                    return []
+                # A Russia-wide story that also names an unmonitored city is
+                # about that other place → drop it rather than bucket it.
+                if _mentions_russia(item.title, item.text) and mentions_unmonitored_city(
+                    item.title, item.text, self._monitored_tokens
+                ):
                     report.unmatched += 1
                     return []
                 bucket = await self._world_bucket()

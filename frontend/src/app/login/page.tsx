@@ -59,7 +59,8 @@ export default function LoginPage() {
    * which we forward to the backend for HMAC verification.
    */
   const loginTelegram = () => {
-    const botUser = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME;
+    // Username without a leading @ — Telegram rejects "@name".
+    const botUser = (process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || "").replace(/^@/, "").trim();
     if (!botUser) {
       setError("Не задан NEXT_PUBLIC_TELEGRAM_BOT_USERNAME (см. docs/AUTH.md)");
       return;
@@ -68,6 +69,8 @@ export default function LoginPage() {
     if (!container) return;
     if (container.childElementCount > 0) return;
     // Inject the official widget button; it handles the popup itself.
+    // NOTE: Telegram shows "Bot domain invalid" here until the current site
+    // domain is registered for the bot in @BotFather via /setdomain.
     const s = document.createElement("script");
     s.async = true;
     s.src = "https://telegram.org/js/telegram-widget.js?22";
@@ -145,6 +148,10 @@ export default function LoginPage() {
         <div id="tg-login-widget" className="flex justify-center" />
         <p className="text-center text-[11px] text-muted-foreground">
           Аккаунт должен быть привязан администратором по Telegram.
+        </p>
+        <p className="text-center text-[11px] text-muted-foreground/70">
+          Если вместо кнопки — «Bot domain invalid», добавьте домен этого сайта боту
+          в @BotFather → /setdomain.
         </p>
       </form>
     </div>
