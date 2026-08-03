@@ -11,11 +11,16 @@ interface TgAuthResult {
   user?: unknown;
   error?: string;
 }
+interface TgAuthOptions {
+  client_id: number;
+  scope?: string[];
+  lang?: string;
+  nonce?: string;
+  redirect_uri?: string;
+}
 interface TgLogin {
-  auth: (
-    opts: { client_id: number; scope?: string[]; lang?: string; nonce?: string },
-    cb: (data: TgAuthResult | null) => void
-  ) => void;
+  auth: (opts: TgAuthOptions, cb: (data: TgAuthResult | null) => void) => void;
+  init?: (opts: TgAuthOptions, cb: (data: TgAuthResult | null) => void) => void;
   open?: (cb: (data: TgAuthResult | null) => void) => void;
 }
 
@@ -86,24 +91,40 @@ export default function LoginPage() {
       return;
     }
     setError(null);
-    TL.auth({ client_id: clientId, scope: ["profile", "write"] }, (data) => {
-      if (!data) {
-        setError("Вход через Telegram отменён");
-        return;
+    // The OIDC library requires a redirect_uri that is registered in BotFather
+    // (Bot Settings → Web Login → Allowed URLs). Use this login page's URL.
+    const redirectUri = `${window.location.origin}/login`;
+    TL.auth(
+      { client_id: clientId, scope: ["profile", "write"], redirect_uri: redirectUri },
+      (data) => {
+        if (!data) {
+          setError("Вход через Telegram отменён");
+          return;
+        }
+        if (data.error) {
+          setError(`Telegram: ${data.error}`);
+          return;
+        }
+        if (data.id_token) exchange("telegram/oidc", { id_token: data.id_token });
+        else setError("Telegram не вернул токен");
       }
-      if (data.error) {
-        setError(`Telegram: ${data.error}`);
-        return;
-      }
-      if (data.id_token) exchange("telegram/oidc", { id_token: data.id_token });
-      else setError("Telegram не вернул токен");
-    });
+    );
   };
 
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     setDiag({ host: window.location.hostname, bot: String(clientId) });
+
+    // If Telegram redirected back to us with a token (full-page OIDC flow),
+    // pick it up from the URL fragment/query and complete the login.
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const queryParams = new URLSearchParams(window.location.search);
+    const idToken = hashParams.get("id_token") || queryParams.get("id_token");
+    if (idToken) {
+      window.history.replaceState({}, "", window.location.pathname);
+      exchange("telegram/oidc", { id_token: idToken });
+    }
 
     // Load the OIDC login library once.
     if (!document.getElementById("tg-oidc-script")) {
