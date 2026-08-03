@@ -406,7 +406,7 @@ export default function NewsPage() {
                 const showText = alwaysText || expanded.has(n.id);
                 return (
                 <Fragment key={n.id}>
-                <tr className={`border-t border-border ${STATUS_ROW_TINT[n.status] ?? ""}`}>
+                <tr className={`border-t border-border ${showText ? "news-has-preview" : ""} ${STATUS_ROW_TINT[n.status] ?? ""}`}>
                   <td className="px-3 py-3">
                     <Checkbox
                       checked={selected.includes(n.id)}
@@ -526,8 +526,8 @@ export default function NewsPage() {
                   </td>
                 </tr>
                 {showText && (
-                  <tr className={`border-t border-border ${STATUS_ROW_TINT[n.status] ?? "bg-muted/30"}`}>
-                    <td />
+                  <tr className={`news-preview-row border-t border-border ${STATUS_ROW_TINT[n.status] ?? "bg-muted/30"}`}>
+                    <td className="news-preview-spacer" />
                     <td colSpan={8} className="px-4 py-3">
                       <div className="whitespace-pre-wrap text-sm text-muted-foreground">
                         {previews[n.id] ?? "Загрузка…"}

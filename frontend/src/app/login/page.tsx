@@ -13,6 +13,9 @@ export default function LoginPage() {
   const [needTotp, setNeedTotp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  //: Diagnostics for the Telegram widget: the domain Telegram sees + the bot
+  //: username baked into the bundle. Helps debug "Bot domain invalid".
+  const [diag, setDiag] = useState<{ host: string; bot: string } | null>(null);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -92,6 +95,12 @@ export default function LoginPage() {
       else setError("Вход через Telegram отменён");
     };
 
+    // Record what the widget will use, so a domain/username mismatch is visible.
+    setDiag({
+      host: window.location.hostname,
+      bot: (process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || "").replace(/^@/, "").trim(),
+    });
+
     // Auto-embed the official Telegram Login Widget button on mount.
     loginTelegram();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -150,9 +159,15 @@ export default function LoginPage() {
           Аккаунт должен быть привязан администратором по Telegram.
         </p>
         <p className="text-center text-[11px] text-muted-foreground/70">
-          Если вместо кнопки — «Bot domain invalid», добавьте домен этого сайта боту
-          в @BotFather → /setdomain.
+          Если вместо кнопки — «Bot domain invalid»: в @BotFather → /setdomain укажите
+          <b> только домен</b> (без https:// и без /login).
         </p>
+        {diag && (
+          <p className="text-center text-[10px] text-muted-foreground/60">
+            Домен для /setdomain: <b>{diag.host || "—"}</b> · бот:{" "}
+            <b>{diag.bot ? "@" + diag.bot : "не задан"}</b>
+          </p>
+        )}
       </form>
     </div>
   );

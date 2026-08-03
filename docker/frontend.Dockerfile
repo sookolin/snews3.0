@@ -13,15 +13,12 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # Server-side proxy target baked into the build (Docker service name).
 ARG API_PROXY_TARGET=http://backend:8000
 ENV API_PROXY_TARGET=${API_PROXY_TARGET}
-# Public build-time envs (inlined into client bundle).
+# Public build-time envs (inlined into client bundle at BUILD time — changing
+# them in .env requires a frontend rebuild, not just a restart).
 ARG NEXT_PUBLIC_YANDEX_MAPS_KEY=
 ENV NEXT_PUBLIC_YANDEX_MAPS_KEY=${NEXT_PUBLIC_YANDEX_MAPS_KEY}
-ARG NEXT_PUBLIC_YANDEX_CLIENT_ID=
-ENV NEXT_PUBLIC_YANDEX_CLIENT_ID=${NEXT_PUBLIC_YANDEX_CLIENT_ID}
 ARG NEXT_PUBLIC_TELEGRAM_BOT_USERNAME=
 ENV NEXT_PUBLIC_TELEGRAM_BOT_USERNAME=${NEXT_PUBLIC_TELEGRAM_BOT_USERNAME}
-ARG NEXT_PUBLIC_VK_CLIENT_ID=
-ENV NEXT_PUBLIC_VK_CLIENT_ID=${NEXT_PUBLIC_VK_CLIENT_ID}
 RUN npm run build
 
 FROM node:20-alpine AS runner
