@@ -2,7 +2,7 @@
 
 import { Fragment, useState, useEffect } from "react";
 import useSWR from "swr";
-import { CalendarClock, Check, ChevronDown, ChevronRight, Pencil, Trash2, Undo2, X } from "lucide-react";
+import { CalendarClock, Check, ChevronDown, ChevronRight, Pencil, RefreshCw, Trash2, Undo2, X } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
 import type { City, NewsItem, Page, Source, User } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
@@ -235,11 +235,21 @@ export default function NewsPage() {
       <PageHeader
         title="Новости"
         action={
-          selected.length > 0 ? (
-            <button className="btn-danger" onClick={bulkDelete}>
-              <Trash2 className="h-4 w-4" /> Удалить выбранные ({selected.length})
+          <div className="flex items-center gap-2">
+            {selected.length > 0 && (
+              <button className="btn-danger" onClick={bulkDelete}>
+                <Trash2 className="h-4 w-4" /> Удалить выбранные ({selected.length})
+              </button>
+            )}
+            <button
+              className="btn-outline"
+              onClick={() => mutate()}
+              disabled={isLoading}
+              title="Обновить список новостей"
+            >
+              <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} /> Обновить
             </button>
-          ) : undefined
+          </div>
         }
       />
 

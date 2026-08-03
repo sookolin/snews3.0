@@ -6,7 +6,7 @@ import { Menu, X, LogOut, Sun, Moon, SunMoon, UserCircle } from "lucide-react";
 import Link from "next/link";
 import { useTheme } from "next-themes";
 import useSWR from "swr";
-import { getToken, clearTokens, fetcher } from "@/lib/api";
+import { getToken, clearTokens, fetcher, tryTelegramWebAppLogin } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
 import { BellButton } from "@/components/BellButton";
 import { useProfileWatcher } from "@/lib/useProfileWatcher";
@@ -40,8 +40,15 @@ export function AppShell({ children }: { children: ReactNode }) {
   useNewsPing();
 
   useEffect(() => {
-    if (!getToken()) router.replace("/login");
-    else setReady(true);
+    if (getToken()) {
+      setReady(true);
+      return;
+    }
+    // No token yet: if opened as a Telegram Mini App, sign in automatically.
+    tryTelegramWebAppLogin().then((ok) => {
+      if (ok) setReady(true);
+      else router.replace("/login");
+    });
   }, [router]);
 
   useEffect(() => {

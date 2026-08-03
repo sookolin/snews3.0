@@ -49,10 +49,9 @@ class ProfileUpdateIn(BaseModel):
     language: str | None = None
     email: str | None = None
     password: str | None = None
-    # Social account IDs — users link/unlink their own accounts here.
+    # Telegram link — users manage their own binding here.
     telegram_id: int | None = None
-    yandex_id: str | None = None
-    vk_id: str | None = None
+    telegram_username: str | None = None
 
 
 class NotifyPrefsIn(BaseModel):
@@ -178,7 +177,7 @@ async def update_profile(
 
     # Track meaningful changes for notifications before applying them.
     changed_fields: list[str] = []
-    for key in ("full_name", "email", "language", "telegram_id", "yandex_id", "vk_id"):
+    for key in ("full_name", "email", "language", "telegram_id", "telegram_username"):
         if key in data and getattr(user, key) != data[key]:
             changed_fields.append(key)
 
@@ -193,8 +192,7 @@ async def update_profile(
             "email": "email",
             "language": "язык",
             "telegram_id": "Telegram ID",
-            "yandex_id": "Яндекс ID",
-            "vk_id": "VK ID",
+            "telegram_username": "Telegram ник",
         }
         changed_str = ", ".join(field_labels.get(f, f) for f in changed_fields)
         notif = Notification(

@@ -36,8 +36,7 @@ interface UserForm {
   is_active: boolean;
   language: string;
   telegram_id?: number | null;
-  yandex_id?: string | null;
-  vk_id?: string | null;
+  telegram_username?: string | null;
   permissions: { grant?: string[]; deny?: string[] };
   password?: string;
 }
@@ -52,7 +51,7 @@ const FALLBACK_ROLE_LABELS: Record<string, string> = {
 
 const EMPTY: UserForm = {
   email: "", full_name: "", role: "reviewer", is_active: true, language: "ru",
-  telegram_id: null, yandex_id: "", vk_id: "", permissions: {}, password: "",
+  telegram_id: null, telegram_username: "", permissions: {}, password: "",
 };
 
 export default function UsersPage() {
@@ -158,8 +157,7 @@ export default function UsersPage() {
     setForm({
       id: u.id, email: u.email, full_name: u.full_name ?? "", role: u.role,
       is_active: u.is_active, language: u.language, telegram_id: u.telegram_id ?? null,
-      yandex_id: u.yandex_id ?? "",
-      vk_id: u.vk_id ?? "",
+      telegram_username: (u as { telegram_username?: string }).telegram_username ?? "",
       permissions: (u.permissions ?? {}) as UserForm["permissions"],
       password: "",
     });
@@ -191,18 +189,23 @@ export default function UsersPage() {
   const save = async () => {
     if (!form) return;
     setError(null);
+    if (!form.id && !form.telegram_id) {
+      setError("Укажите Telegram ID — без привязки Telegram пользователя создать нельзя.");
+      return;
+    }
     const body: Record<string, unknown> = {
-      email: form.email,
-      full_name: form.full_name || null,
       role: form.role,
       is_active: form.is_active,
       language: form.language,
       telegram_id: form.telegram_id ?? null,
-      yandex_id: form.yandex_id || null,
-      vk_id: form.vk_id || null,
+      telegram_username: form.telegram_username || null,
       permissions: form.permissions ?? {},
     };
-    if (form.password) body.password = form.password;
+    if (form.id) {
+      body.email = form.email;
+      body.full_name = form.full_name || null;
+      if (form.password) body.password = form.password;
+    }
     try {
       if (form.id) await api(`/users/${form.id}`, { method: "PATCH", body: JSON.stringify(body) });
       else await api("/users", { method: "POST", body: JSON.stringify(body) });
@@ -281,7 +284,7 @@ export default function UsersPage() {
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {data?.items.map((u) => {
-          const ux = u as User & { photo_url?: string | null; yandex_id?: string; vk_id?: string };
+          const ux = u as User & { photo_url?: string | null };
           return (
             <div key={u.id} className="card flex flex-col">
               {/* Header: avatar + identity */}
@@ -332,20 +335,7 @@ export default function UsersPage() {
                     {u.telegram_id}
                   </span>
                 )}
-                {ux.yandex_id && (
-                  <span className="flex items-center gap-1">
-                    <span className="text-[10px] font-bold">Я</span> {ux.yandex_id}
-                  </span>
-                )}
-                {ux.vk_id && (
-                  <span className="flex items-center gap-1">
-                    <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0 fill-[#4680C2]" aria-hidden="true">
-                      <path d="M15.684 0H8.316C1.592 0 0 1.592 0 8.316v7.368C0 22.408 1.592 24 8.316 24h7.368C22.408 24 24 22.408 24 15.684V8.316C24 1.592 22.408 0 15.684 0zm3.692 17.123h-1.744c-.66 0-.862-.523-2.049-1.714-1.033-1.01-1.49-1.135-1.744-1.135-.356 0-.458.102-.458.597v1.563c0 .424-.135.678-1.253.678-1.846 0-3.896-1.118-5.335-3.202C4.624 10.857 4.03 8.57 4.03 8.096c0-.254.102-.491.597-.491h1.744c.444 0 .613.204.786.681.863 2.49 2.303 4.675 2.896 4.675.22 0 .322-.102.322-.66V9.948c-.068-1.186-.695-1.287-.695-1.71 0-.204.17-.407.44-.407h2.743c.373 0 .508.204.508.643v3.473c0 .372.17.508.271.508.22 0 .407-.136.813-.542 1.253-1.405 2.151-3.574 2.151-3.574.119-.254.322-.491.764-.491h1.744c.525 0 .643.27.525.643-.22 1.017-2.354 4.031-2.354 4.031-.186.305-.254.440 0 .779.186.254.796.779 1.203 1.253.745.847 1.32 1.558 1.473 2.049.17.49-.085.744-.576.744z"/>
-                    </svg>
-                    {ux.vk_id}
-                  </span>
-                )}
-                {!u.telegram_id && !ux.yandex_id && !ux.vk_id && (
+                {!u.telegram_id && (
                   <span className="italic opacity-60">нет привязок</span>
                 )}
               </div>
@@ -413,10 +403,18 @@ export default function UsersPage() {
         {form && (
           <div className="space-y-4">
             {error && <p className="rounded-md bg-rose-50 p-2 text-sm text-rose-600 dark:bg-rose-950/40">{error}</p>}
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="Email"><input className="input" value={form.email} onChange={(e) => upd({ email: e.target.value })} /></Field>
-              <Field label="Имя"><input className="input" value={form.full_name ?? ""} onChange={(e) => upd({ full_name: e.target.value })} /></Field>
-            </div>
+            {!form.id && (
+              <p className="rounded-md bg-sky-50 p-2 text-xs text-sky-700 dark:bg-sky-950/40 dark:text-sky-300">
+                Новый пользователь создаётся привязкой Telegram и ника. Email, пароль и остальные
+                данные пользователь настроит сам после входа через Telegram.
+              </p>
+            )}
+            {form.id && (
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Email"><input className="input" value={form.email} onChange={(e) => upd({ email: e.target.value })} /></Field>
+                <Field label="Имя"><input className="input" value={form.full_name ?? ""} onChange={(e) => upd({ full_name: e.target.value })} /></Field>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <Field label="Роль" hint="Задаёт базовый набор прав">
                 <Select value={form.role} onChange={(v) => upd({ role: v })}>
@@ -427,21 +425,20 @@ export default function UsersPage() {
                     ))}
                 </Select>
               </Field>
-              <Field label={form.id ? "Новый пароль" : "Пароль"} hint={form.id ? "Оставьте пустым, чтобы не менять" : "Минимум 8 символов"}>
-                <input className="input" type="password" value={form.password ?? ""} onChange={(e) => upd({ password: e.target.value })} />
-              </Field>
+              {form.id && (
+                <Field label="Новый пароль" hint="Оставьте пустым, чтобы не менять">
+                  <input className="input" type="password" value={form.password ?? ""} onChange={(e) => upd({ password: e.target.value })} />
+                </Field>
+              )}
             </div>
             <div className="rounded-lg border border-border px-4 py-3">
-              <div className="mb-3 text-sm font-medium">Привязка аккаунтов</div>
-              <div className="grid grid-cols-3 gap-4">
-                <Field label="Telegram ID" hint="Числовой ID, для DM">
+              <div className="mb-3 text-sm font-medium">Привязка Telegram</div>
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Telegram ID" hint="Числовой ID — обязателен">
                   <input className="input" type="number" value={form.telegram_id ?? ""} onChange={(e) => upd({ telegram_id: e.target.value ? Number(e.target.value) : null })} placeholder="123456789" />
                 </Field>
-                <Field label="Яндекс ID" hint="Для входа через Яндекс">
-                  <input className="input" value={form.yandex_id ?? ""} onChange={(e) => upd({ yandex_id: e.target.value })} placeholder="yandex_uid" />
-                </Field>
-                <Field label="VK ID" hint="Для входа через VK">
-                  <input className="input" value={(form as UserForm & { vk_id?: string }).vk_id ?? ""} onChange={(e) => upd({ vk_id: e.target.value } as Partial<UserForm>)} placeholder="vk_uid" />
+                <Field label="Ник (username)" hint="Без @">
+                  <input className="input" value={form.telegram_username ?? ""} onChange={(e) => upd({ telegram_username: e.target.value.replace(/^@/, "") })} placeholder="username" />
                 </Field>
               </div>
             </div>

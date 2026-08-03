@@ -53,7 +53,18 @@ async def list_news(
     if scope == "world":
         conditions.append(News.is_world_news.is_(True))
     elif scope == "city":
-        conditions.append(News.is_world_news.is_(False))
+        # "По городам" = any item tied to at least one real city (its primary
+        # city OR any target city). This includes multi-city / regional posts,
+        # which previously fell only into the "Все" tab. World-only items with
+        # no city association are excluded.
+        from shared.models.news import news_target_cities
+
+        conditions.append(
+            or_(
+                News.city_id.is_not(None),
+                News.id.in_(select(news_target_cities.c.news_id)),
+            )
+        )
     if city_id:
         # Match the primary city OR any target city, so a multi-city post shows
         # up under every city it publishes to — not only its moderation-owner

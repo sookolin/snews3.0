@@ -420,7 +420,12 @@ class IngestionPipeline:
 
         # Detect a follow-up: strongly similar to a recent published item but
         # not an outright duplicate → publish as a reply to that message.
-        follow_up_of = await self._find_follow_up_target(item, primary.id)
+        # Disabled by default: fuzzy matching threaded too many unrelated posts
+        # (every post in a busy channel ended up replying to the same message).
+        # Enable explicitly via ``pipeline.thread_follow_ups`` when desired.
+        follow_up_of = None
+        if bool(await self.settings_service.get("pipeline.thread_follow_ups", False)):
+            follow_up_of = await self._find_follow_up_target(item, primary.id)
 
         # 2) Persist raw news
         # When the source provides no publication timestamp (website parsers,

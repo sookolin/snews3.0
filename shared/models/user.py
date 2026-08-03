@@ -33,10 +33,12 @@ class User(Base, TimestampMixin):
     is_2fa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     totp_secret: Mapped[str | None] = mapped_column(String(64))
 
-    # Telegram linkage (for bot moderation permission checks)
+    # Telegram linkage (for bot moderation permission checks + login)
     telegram_id: Mapped[int | None] = mapped_column(BigInteger, unique=True, index=True)
+    telegram_username: Mapped[str | None] = mapped_column(String(64))
 
-    # Linked external accounts (OAuth login)
+    # Legacy external accounts (OAuth login via VK/Yandex) — retained for
+    # backwards compatibility; no longer used for new sign-ins.
     yandex_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
     vk_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
 

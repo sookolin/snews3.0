@@ -10,20 +10,23 @@ from shared.enums import UserRole
 from shared.schemas.common import ORMModel
 
 
-class UserBase(BaseModel):
-    email: EmailStr
-    full_name: str | None = None
+class UserCreate(BaseModel):
+    """Create a user by linking their Telegram account.
+
+    New accounts are provisioned by an admin who binds a Telegram id (and
+    optionally a username). Email/password are set later by the user, so both
+    are optional here.
+    """
+
+    telegram_id: int
+    telegram_username: str | None = None
     role: UserRole = UserRole.REVIEWER
     is_active: bool = True
     language: str = "ru"
-    telegram_id: int | None = None
-    yandex_id: str | None = None
-    vk_id: str | None = None
     permissions: dict = Field(default_factory=dict)
-
-
-class UserCreate(UserBase):
-    password: str = Field(min_length=8, max_length=128)
+    email: EmailStr | None = None
+    full_name: str | None = None
+    password: str | None = Field(default=None, min_length=8, max_length=128)
 
 
 class UserUpdate(BaseModel):
@@ -33,8 +36,7 @@ class UserUpdate(BaseModel):
     is_active: bool | None = None
     language: str | None = None
     telegram_id: int | None = None
-    yandex_id: str | None = None
-    vk_id: str | None = None
+    telegram_username: str | None = None
     permissions: dict | None = None
     password: str | None = Field(default=None, min_length=8, max_length=128)
 
@@ -49,8 +51,7 @@ class UserOut(ORMModel):
     is_2fa_enabled: bool
     language: str
     telegram_id: int | None
-    yandex_id: str | None
-    vk_id: str | None
+    telegram_username: str | None = None
     photo_url: str | None
     permissions: dict
     last_login_at: datetime | None

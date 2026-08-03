@@ -99,22 +99,36 @@ class BaseAIProvider(abc.ABC):
     def _strip_lead_heading(text: str, title: str) -> str:
         """Remove a bold lead sentence the model may add as a pseudo-heading.
 
-        Some models start the body with a fully-bold first line (often the title
-        again), which renders as a duplicate heading above the real title. We
-        strip a leading ``<b>…</b>`` line, especially when it echoes the title.
+        Some models start the body with a fully-bold first line/sentence (often
+        the title again), which renders as a duplicate heading above the real
+        title. The body must start with plain narration, so we drop any leading
+        fully-bold segment — whether it ends at a newline or at the end of the
+        first sentence — regardless of its length.
         """
         import re
 
         stripped = text.lstrip()
-        # A leading line that is entirely wrapped in <b>…</b> (optionally with a
-        # trailing period) — drop it and any blank line right after.
-        m = re.match(r"^<b>\s*(.+?)\s*</b>\s*[.:]?\s*(?:\n+|$)", stripped, re.IGNORECASE | re.DOTALL)
+
+        # Case 1: a leading line entirely wrapped in <b>…</b>, ending at a
+        # newline (or the whole body). Drop it and the following blank line.
+        m = re.match(
+            r"^<b>\s*(.+?)\s*</b>\s*[.:!?]?\s*(?:\n+|$)",
+            stripped,
+            re.IGNORECASE | re.DOTALL,
+        )
         if m:
-            lead = re.sub(r"<[^>]+>", "", m.group(1)).strip().rstrip(".").lower()
-            title_norm = re.sub(r"<[^>]+>", "", title or "").strip().rstrip(".").lower()
-            # Drop when it echoes the title, or is a short standalone heading.
-            if not title_norm or lead == title_norm or len(lead) <= 120:
-                return stripped[m.end():].lstrip()
+            return stripped[m.end():].lstrip()
+
+        # Case 2: a leading bold sentence on the same line as the rest of the
+        # body, e.g. "<b>Главное произошло сегодня.</b> Далее обычный текст…".
+        m = re.match(
+            r"^<b>\s*(.+?[.!?])\s*</b>\s*", stripped, re.IGNORECASE | re.DOTALL
+        )
+        if m and "</b>" not in stripped[m.end():]:
+            # Only strip when this is the single bold lead, not inline emphasis
+            # scattered through the paragraph.
+            return stripped[m.end():].lstrip()
+
         return text
 
     @abc.abstractmethod

@@ -23,6 +23,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="ru" suppressHydrationWarning>
       <head>
         <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        {/* Telegram Mini App SDK — exposes window.Telegram.WebApp when the
+            panel is opened from the bot, enabling auto sign-in. */}
+        <script src="https://telegram.org/js/telegram-web-app.js" async />
       </head>
       <body>
         <Providers>

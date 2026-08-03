@@ -85,6 +85,33 @@ export async function api<T = unknown>(
 
 export const fetcher = <T = unknown>(path: string) => api<T>(path);
 
+/**
+ * When the panel is opened as a Telegram Mini App (WebApp) the bot passes a
+ * signed ``initData`` string. Exchange it for a JWT pair so the mini app comes
+ * up already authenticated as the Telegram account interacting with the bot.
+ * Returns true when a session was established.
+ */
+export async function tryTelegramWebAppLogin(): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+  const tg = (window as unknown as { Telegram?: { WebApp?: { initData?: string; ready?: () => void } } }).Telegram?.WebApp;
+  const initData = tg?.initData;
+  if (!initData) return false;
+  try {
+    tg?.ready?.();
+    const res = await fetch("/api/v1/auth/telegram/webapp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ init_data: initData }),
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    setTokens(data.access_token, data.refresh_token);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function login(email: string, password: string, totp?: string) {
   const res = await fetch("/api/v1/auth/login", {
     method: "POST",

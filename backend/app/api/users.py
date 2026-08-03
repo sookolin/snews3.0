@@ -227,8 +227,7 @@ async def update_user(
     old_full_name = target_before.full_name
     old_email = target_before.email
     old_telegram_id = target_before.telegram_id
-    old_yandex_id = target_before.yandex_id
-    old_vk_id = target_before.vk_id
+    old_telegram_username = target_before.telegram_username
 
     user = await UserService(session).update(user_id, payload)
     await AuditService(session).log(
@@ -252,8 +251,7 @@ async def update_user(
         "full_name": "имя",
         "email": "email",
         "telegram_id": "Telegram ID",
-        "yandex_id": "Яндекс ID",
-        "vk_id": "VK ID",
+        "telegram_username": "Telegram ник",
     }
 
     if "role" in changes and changes["role"] != old_role:
@@ -307,8 +305,7 @@ async def update_user(
             "full_name": old_full_name,
             "email": old_email,
             "telegram_id": old_telegram_id,
-            "yandex_id": old_yandex_id,
-            "vk_id": old_vk_id,
+            "telegram_username": old_telegram_username,
         }.get(field)
         if changes[field] != old_val:
             changed_data.append(label)

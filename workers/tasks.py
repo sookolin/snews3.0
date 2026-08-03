@@ -317,52 +317,6 @@ def publish_news(self, news_id: int) -> dict:  # type: ignore[no-untyped-def]
         raise self.retry(exc=exc, countdown=120) from exc
 
 
-@celery_app.task(name="workers.tasks.publish_news_all_cities", bind=True, max_retries=2)
-def publish_news_all_cities(self, news_id: int) -> dict:  # type: ignore[no-untyped-def]
-    """Publish one news item to the channels of *every* active city.
-
-    Used for announcements that concern all cities at once. The item is
-    published city by city, keeping a combined map of message ids.
-    """
-
-    async def _run() -> dict:
-        from shared.models.city import City as _City
-        from shared.services.publisher_service import PublisherService
-
-        published: dict[str, list[int]] = {}
-        errors: list[str] = []
-        async with session_scope() as session:
-            news = await session.get(News, news_id)
-            if news is None:
-                return {"news_id": news_id, "skipped": True}
-            original_city = news.city_id
-
-            cities = (
-                await session.scalars(select(_City).where(_City.is_active.is_(True)))
-            ).all()
-            for city in cities:
-                news.city_id = city.id
-                news.published_message_ids = {}
-                try:
-                    await PublisherService(session).publish(news_id)
-                    published.update(news.published_message_ids or {})
-                except Exception as exc:  # noqa: BLE001
-                    errors.append(f"{city.name}: {exc}")
-
-            # Restore the original city and store the combined result.
-            news.city_id = original_city
-            news.published_message_ids = published
-            news.error = "; ".join(errors) or None
-            await session.commit()
-        return {"news_id": news_id, "channels": len(published), "errors": len(errors)}
-
-    try:
-        return run_async(_run())
-    except Exception as exc:  # noqa: BLE001
-        log.error("publish_all_cities_failed", news=news_id, error=str(exc))
-        raise self.retry(exc=exc, countdown=60) from exc
-
-
 @celery_app.task(name="workers.tasks.publish_scheduled_news")
 def publish_scheduled_news() -> dict:
     """Publish scheduled news whose time has come, respecting channel windows."""
@@ -555,6 +509,29 @@ def _parse_hhmm(value: str | None) -> int | None:
     return h * 60 + m
 
 
+async def _render_weather(session, city, body: str) -> str:
+    """Render the weather body through the city template (fallback: plain)."""
+    from shared.models.template import Template
+    from shared.services.template_renderer import TemplateRenderer
+
+    template = None
+    if getattr(city, "template_id", None):
+        template = await session.get(Template, city.template_id)
+    if template is None:
+        template = await session.scalar(
+            select(Template).where(Template.is_default.is_(True)).limit(1)
+        )
+    if template is None:
+        template = await session.scalar(select(Template).limit(1))
+    if template is None:
+        return body
+    return TemplateRenderer().render(
+        template,
+        title=f"Погода в городе {city.name}",
+        text=body,
+        city=city.name,
+    )
+
 async def _publish_weather_for_city(session, city) -> int:
     """Fetch the forecast and post it to every active channel of *city*."""
     from shared.models.channel import Channel
@@ -573,7 +550,18 @@ async def _publish_weather_for_city(session, city) -> int:
     forecast = await weather_service.fetch_forecast(lat, lon)
     if forecast is None:
         return 0
-    text = weather_service.format_post(city.name, forecast)
+
+    # Skip parts of the day already in the past (rest-of-day summary when
+    # published in the evening). Uses the UI timezone offset for 'now'.
+    from shared.services.settings_service import SettingsService
+    tz_offset = int(await SettingsService(session).get('ui.timezone_offset_hours', 3))
+    now_local = datetime.now(timezone.utc) + timedelta(hours=tz_offset)
+    body = weather_service.format_post(city.name, forecast, from_hour=now_local.hour)
+    if not body.strip():
+        body = weather_service.format_post(city.name, forecast, from_hour=0)
+
+    # Render through the city's bound template (falls back to default).
+    text = await _render_weather(session, city, body)
 
     channels = (
         await session.scalars(

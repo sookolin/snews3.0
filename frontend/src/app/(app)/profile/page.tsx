@@ -91,7 +91,7 @@ export default function ProfilePage() {
   const [editingProfile, setEditingProfile] = useState(false);
   const [profileForm, setProfileForm] = useState({
     full_name: "", email: "", password: "", password2: "",
-    telegram_id: "", yandex_id: "", vk_id: "",
+    telegram_id: "", telegram_username: "",
   });
   const [profileError, setProfileError] = useState<string | null>(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
@@ -155,8 +155,7 @@ export default function ProfilePage() {
       password: "",
       password2: "",
       telegram_id: u.telegram_id ? String(u.telegram_id) : "",
-      yandex_id: u.yandex_id ?? "",
-      vk_id: u.vk_id ?? "",
+      telegram_username: (u as { telegram_username?: string }).telegram_username ?? "",
     });
     setProfileError(null);
     setEditingProfile(true);
@@ -181,10 +180,9 @@ export default function ProfilePage() {
         body.email = profileForm.email;
       }
       if (profileForm.password) body.password = profileForm.password;
-      // Social links — send current form values (null means "unlink")
+      // Telegram link — send current form values (null means "unlink")
       body.telegram_id = profileForm.telegram_id ? Number(profileForm.telegram_id) : null;
-      body.yandex_id = profileForm.yandex_id || null;
-      body.vk_id = profileForm.vk_id || null;
+      body.telegram_username = profileForm.telegram_username || null;
       await api(`/profile${userId ? `?user_id=${userId}` : ""}`, {
         method: "PATCH",
         body: JSON.stringify(body),
@@ -362,8 +360,7 @@ export default function ProfilePage() {
             <Row label="Роль">{labels[u.role] ?? u.role}</Row>
             <Row label="Двухфакторная авторизация">{u.is_2fa_enabled ? "Включена" : "Выключена"}</Row>
             <Row label="Telegram">{u.telegram_id ? String(u.telegram_id) : "не привязан"}</Row>
-            <Row label="Яндекс">{u.yandex_id || "не привязан"}</Row>
-            <Row label="VK">{u.vk_id || "не привязан"}</Row>
+            <Row label="Ник в Telegram">{(u as { telegram_username?: string }).telegram_username ? "@" + (u as { telegram_username?: string }).telegram_username : "—"}</Row>
             <Row label="Последний вход">
               {u.last_login_at ? new Date(u.last_login_at).toLocaleString("ru-RU") : "—"}
             </Row>
@@ -595,7 +592,7 @@ export default function ProfilePage() {
           {/* Social accounts */}
           <div className="rounded-lg border border-border px-4 py-3">
             <div className="mb-3 text-sm font-medium">Привязка аккаунтов</div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 gap-4">
               <Field label="Telegram ID" hint="Числовой ID, для DM-уведомлений">
                 <input
                   type="number"
@@ -605,22 +602,13 @@ export default function ProfilePage() {
                   placeholder="123456789"
                 />
               </Field>
-              <Field label="Яндекс ID" hint="Для входа через Яндекс">
+              <Field label="Ник в Telegram" hint="Без @">
                 <input
                   type="text"
                   className="input"
-                  value={profileForm.yandex_id}
-                  onChange={(e) => setProfileForm((f) => ({ ...f, yandex_id: e.target.value }))}
-                  placeholder="yandex_uid"
-                />
-              </Field>
-              <Field label="VK ID" hint="Для входа через VK">
-                <input
-                  type="text"
-                  className="input"
-                  value={profileForm.vk_id}
-                  onChange={(e) => setProfileForm((f) => ({ ...f, vk_id: e.target.value }))}
-                  placeholder="vk_uid"
+                  value={profileForm.telegram_username}
+                  onChange={(e) => setProfileForm((f) => ({ ...f, telegram_username: e.target.value.replace(/^@/, "") }))}
+                  placeholder="username"
                 />
               </Field>
             </div>

@@ -42,16 +42,31 @@ class UserService:
         return list(rows), total
 
     async def create(self, payload: UserCreate) -> User:
-        if await self.get_by_email(payload.email):
+        import secrets
+
+        if not payload.telegram_id:
+            raise ConflictError("Telegram ID обязателен", code="telegram_required")
+        if await self.get_by_telegram_id(payload.telegram_id):
+            raise ConflictError("Этот Telegram уже привязан", code="telegram_exists")
+
+        # Email/password are optional at creation (the user sets them later).
+        # When absent we synthesise a stable placeholder email and a random
+        # password so the NOT NULL/unique constraints hold; the user signs in
+        # via Telegram until they configure their own credentials.
+        email = (payload.email or f"tg{payload.telegram_id}@telegram.local").lower()
+        if await self.get_by_email(email):
             raise ConflictError("Email already registered", code="email_exists")
+        raw_password = payload.password or secrets.token_urlsafe(24)
+
         user = User(
-            email=payload.email.lower(),
+            email=email,
             full_name=payload.full_name,
             role=payload.role,
             is_active=payload.is_active,
             language=payload.language,
             telegram_id=payload.telegram_id,
-            hashed_password=hash_password(payload.password),
+            telegram_username=(payload.telegram_username or None),
+            hashed_password=hash_password(raw_password),
         )
         self.session.add(user)
         await self.session.flush()

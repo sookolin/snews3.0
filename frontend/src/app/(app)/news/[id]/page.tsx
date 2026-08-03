@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import useSWR from "swr";
-import { Copy, Save, Send, Trash2, Undo2 } from "lucide-react";
+import { Copy, Save, Send, Trash2, Undo2, X } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
 import type { NewsItem, Page } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
@@ -517,6 +517,14 @@ export default function NewsEditorPage() {
             <div className="flex flex-wrap items-center gap-2">
               <button className="btn-outline" disabled={saving} onClick={save}>
                 <Save className="h-4 w-4" /> Сохранить
+              </button>
+              <button
+                className="btn-outline"
+                disabled={saving}
+                onClick={() => router.push("/news")}
+                title="Отменить и вернуться к списку без сохранения"
+              >
+                <X className="h-4 w-4" /> Отмена
               </button>
 
               {isPublished ? (

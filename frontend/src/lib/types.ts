@@ -125,8 +125,7 @@ export interface User {
   is_2fa_enabled: boolean;
   language: string;
   telegram_id?: number | null;
-  yandex_id?: string | null;
-  vk_id?: string | null;
+  telegram_username?: string | null;
   photo_url?: string | null;
   last_login_at?: string | null;
   permissions?: { grant?: string[]; deny?: string[] };

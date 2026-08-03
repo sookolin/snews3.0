@@ -78,12 +78,12 @@ async def _approve(
     lang: str,
     *,
     immediately: bool = False,
-    all_cities: bool = False,
 ) -> None:
     """Approve and queue publication.
 
-    ``immediately`` skips the publication queue; ``all_cities`` publishes the
-    same item to the channels of every active city.
+    ``immediately`` skips the publication queue. A news item already carries its
+    own target cities, so the normal publish path sends it to all of their
+    channels in one action.
     """
     from datetime import datetime, timezone
 
@@ -115,16 +115,13 @@ async def _approve(
             log.warning("publish_enqueue_failed", news=news_id, error=str(exc))
         await session.commit()
 
-    # ``all_cities`` used to fan out to EVERY active city. Now a news item
-    # already carries its own target cities and the normal publish path sends
-    # it to all of their channels in one go, so the "Во все каналы" button just
-    # publishes the item to its intended channels — no separate task needed.
+    # A news item already carries its own target cities and the normal publish
+    # path sends it to all of their channels in one go.
     await callback.answer(t("moderation.approved", lang))
     suffix = "" if slot == "immediate" else f" · в очереди на {slot}"
-    scope = " · во все каналы города" if all_cities else ""
     await _mark_card(
         callback,
-        f"✅ {t('moderation.approved', lang)} · {who}{suffix}{scope}",
+        f"✅ {t('moderation.approved', lang)} · {who}{suffix}",
         keep_buttons=True,
     )
 

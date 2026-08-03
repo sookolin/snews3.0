@@ -59,6 +59,32 @@ export function ResizableTable({
   const [widths, setWidths] = useState<Record<number, number>>({});
   const drag = useRef<{ index: number; startX: number; startW: number } | null>(null);
   const headRefs = useRef<(HTMLTableCellElement | null)[]>([]);
+  const tableRef = useRef<HTMLTableElement | null>(null);
+
+  /** Plain-text labels for each column, used as mobile card field names. */
+  const labelText = (node: ReactNode): string => {
+    if (typeof node === "string" || typeof node === "number") return String(node);
+    return "";
+  };
+
+  // On mobile the table collapses into cards (see globals.css). Each cell then
+  // shows its column name via a ``data-label`` attribute, which we stamp onto
+  // every ``<td>`` after render so pages don't have to annotate each cell.
+  useEffect(() => {
+    const table = tableRef.current;
+    if (!table) return;
+    const labels = columns.map(labelText);
+    for (const row of Array.from(table.tBodies[0]?.rows ?? [])) {
+      let col = 0;
+      for (const cell of Array.from(row.cells)) {
+        const span = cell.colSpan || 1;
+        const label = labels[col] || "";
+        if (label) cell.setAttribute("data-label", label);
+        else cell.removeAttribute("data-label");
+        col += span;
+      }
+    }
+  });
 
   // Read persisted widths after mount so server and client markup agree.
   // Page-provided defaults are the base; any column the user has resized
@@ -111,7 +137,7 @@ export function ResizableTable({
   };
 
   return (
-    <table className="w-full text-sm" style={{ tableLayout: "fixed" }}>
+    <table ref={tableRef} className="resizable-table w-full text-sm" style={{ tableLayout: "fixed" }}>
       <thead className="bg-muted text-muted-foreground">
         <tr>
           {columns.map((label, i) => (

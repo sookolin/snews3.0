@@ -263,9 +263,52 @@ table tbody tr { @apply transition-colors hover:bg-muted/60; }
 }
 
 /* ── Mobile helpers ──────────────────────────────────────────────────────── */
-/* Tables become horizontally scrollable containers on small screens. */
+/* On desktop, tables are horizontally scrollable containers. */
 .table-wrap { @apply w-full overflow-x-auto; }
 .table-wrap table { @apply min-w-[720px]; }
+
+/* On phones, resizable tables collapse into stacked cards: each row becomes a
+   card and each cell shows its column name (stamped as data-label). */
+@media (max-width: 767px) {
+  .table-wrap { @apply overflow-x-visible; }
+  .table-wrap table.resizable-table { @apply min-w-0; }
+
+  table.resizable-table,
+  table.resizable-table tbody,
+  table.resizable-table tr,
+  table.resizable-table td {
+    display: block;
+    width: auto !important;
+  }
+
+  /* Hide the header row; labels move next to each cell instead. */
+  table.resizable-table thead {
+    @apply absolute h-px w-px overflow-hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  table.resizable-table tr {
+    @apply mb-3 rounded-lg border border-border bg-card p-1 shadow-sm;
+  }
+
+  table.resizable-table td {
+    @apply flex items-start justify-between gap-3 border-0 px-3 py-2 text-left;
+  }
+
+  table.resizable-table td:not(:last-child) {
+    @apply border-b border-border/60;
+  }
+
+  table.resizable-table td[data-label]::before {
+    content: attr(data-label);
+    @apply mr-2 shrink-0 text-xs font-medium uppercase tracking-wide text-muted-foreground;
+  }
+
+  /* Cells with no column name (e.g. expandable preview rows) span full width. */
+  table.resizable-table td:not([data-label]) {
+    @apply justify-start;
+  }
+}
 
 /* ── Rich text editor toolbar ────────────────────────────────────────────── */
 .rte-toolbar {
