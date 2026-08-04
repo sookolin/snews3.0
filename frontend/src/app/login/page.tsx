@@ -32,9 +32,6 @@ export default function LoginPage() {
   const [needTotp, setNeedTotp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  //: Diagnostics for the Telegram widget: the domain Telegram sees + the bot
-  //: username baked into the bundle. Helps debug "Bot domain invalid".
-  const [diag, setDiag] = useState<{ host: string; bot: string } | null>(null);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -114,8 +111,6 @@ export default function LoginPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    setDiag({ host: window.location.hostname, bot: String(clientId) });
-
     // If Telegram redirected back to us with a token (full-page OIDC flow),
     // pick it up from the URL fragment/query and complete the login.
     const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
@@ -192,18 +187,6 @@ export default function LoginPage() {
         >
           <Send className="h-4 w-4" /> Войти через Telegram
         </button>
-        <p className="text-center text-[11px] text-muted-foreground">
-          Аккаунт должен быть привязан администратором по Telegram.
-        </p>
-        <p className="text-center text-[11px] text-muted-foreground/70">
-          Origin этого сайта должен быть в @BotFather → Bot Settings → Web Login →
-          Allowed URLs.
-        </p>
-        {diag && (
-          <p className="text-center text-[10px] text-muted-foreground/60">
-            Origin: <b>https://{diag.host || "—"}</b> · client_id: <b>{diag.bot}</b>
-          </p>
-        )}
       </form>
     </div>
   );

@@ -258,6 +258,15 @@ async def _schedule_publication(session, news: News) -> str:  # type: ignore[no-
 
     news.scheduled_at = slot
     news.status = NewsStatus.SCHEDULED
+    log.info(
+        "publication_scheduled",
+        news=news.id,
+        interval_min=interval,
+        minutes_ahead=round((slot - now).total_seconds() / 60, 1),
+        last_scheduled=str(last_scheduled),
+        last_published=str(last_published),
+        last_dispatched=str(last_dispatched),
+    )
     return slot.strftime("%H:%M")
 
 

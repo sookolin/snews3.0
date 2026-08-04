@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from shared.logging import get_logger
+
+log = get_logger("telegram_oidc")
+
 _ISSUER = "https://oauth.telegram.org"
 _JWKS_URL = "https://oauth.telegram.org/.well-known/jwks.json"
 
@@ -34,14 +38,24 @@ def validate_id_token(id_token: str, client_id: int | str) -> dict | None:
         import jwt
 
         signing_key = _jwk_client().get_signing_key_from_jwt(id_token)
+        # Verify signature + iss + exp, but check ``aud`` ourselves: Telegram may
+        # encode it as a number or a string, and PyJWT's aud check is strict on
+        # type, which caused false "invalid token" rejections.
         claims = jwt.decode(
             id_token,
             signing_key.key,
             algorithms=["RS256", "ES256", "EdDSA", "ES256K"],
-            audience=str(client_id),
             issuer=_ISSUER,
-            options={"require": ["exp", "iss", "aud"]},
+            leeway=30,
+            options={"require": ["exp", "iss"], "verify_aud": False},
         )
+        aud = claims.get("aud")
+        aud_values = aud if isinstance(aud, list) else [aud]
+        if str(client_id) not in {str(a) for a in aud_values}:
+            log.warning("telegram_oidc_aud_mismatch", aud=aud, expected=str(client_id))
+            return None
         return claims
-    except Exception:  # noqa: BLE001 - any failure means "not authentic"
+    except Exception as exc:  # noqa: BLE001 - any failure means "not authentic"
+        # Log the concrete reason so misconfig (wrong aud/alg/expired) is visible.
+        log.warning("telegram_oidc_invalid", error=str(exc), error_type=type(exc).__name__)
         return None
