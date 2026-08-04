@@ -7,6 +7,8 @@ about another place and must be dropped, not shown anywhere.
 
 from __future__ import annotations
 
+import functools
+
 #: Major Russian cities (lowercase, nominative). The set is intentionally broad
 #: so a story naming an unmonitored city (e.g. «Омск», «Казань») is recognised.
 _RAW = ""
@@ -28,30 +30,63 @@ _RAW += " псков бийск энгельс рыбинск балаково �
 RU_CITY_NAMES: frozenset[str] = frozenset(_RAW.split())
 
 
-def mentions_unmonitored_city(
-    title: str | None, text: str, allowed_tokens: set[str]
-) -> bool:
-    """True if the text names a known RU city that is NOT in ``allowed_tokens``.
+_NON_CITY_RAW = 'россия рф сибирь урал кавказ крым поволжье донбасс кубань приморье забайкалье волга дон енисей амур байкал кама обь арктика сша китай индия турция германия франция украина европа азия африка америка'
 
-    ``allowed_tokens`` is the lemma set of every monitored city's name/keywords.
-    Detection is lemma-based (via the matcher's lemmatiser) so inflected forms
-    like «в Омске» are recognised. A federal story that also names a specific
-    unmonitored city is about another place and must be dropped.
-    """
+
+def _non_city_lemmas():
+    from shared.services.matcher import _lemma
+    return {_lemma(w) for w in _NON_CITY_RAW.split()}
+
+
+@functools.lru_cache(maxsize=1)
+def _cached_non_city():
+    return _non_city_lemmas()
+
+
+def _geox_lemmas(text):
+    from shared.services.matcher import _morph, _TOKEN_RE
+    analyzer = _morph()
+    if analyzer is None:
+        return set()
+    found = set()
+    for tok in _TOKEN_RE.findall(text.lower()):
+        if len(tok) < 4:
+            continue
+        try:
+            parses = analyzer.parse(tok)
+        except Exception:
+            continue
+        for pr in parses:
+            if 'Geox' in pr.tag:
+                found.add(pr.normal_form)
+                break
+    return found
+
+
+def mentions_unmonitored_city(title, text, allowed_tokens, region_lemmas=None):
     from shared.services.matcher import _lemma, _lemmatize_tokens
-
-    blob = f"{title or ''} {text[:2000]}"
+    blob = (title or '') + ' ' + text[:2000]
+    region_lemmas = region_lemmas or set()
+    geox = _geox_lemmas(blob)
+    if geox:
+        non_city = _cached_non_city()
+        for lemma in geox:
+            if lemma in allowed_tokens:
+                continue
+            if lemma in non_city:
+                continue
+            if lemma in region_lemmas:
+                continue
+            return True
+        return False
     tokens = _lemmatize_tokens(blob)
     for city in RU_CITY_NAMES:
-        # Single-token cities: compare lemmas. Multi-word ones (rare) are
-        # matched by any of their distinctive tokens.
         for part in city.split():
             lemma = _lemma(part)
             if len(lemma) < 4:
-                continue  # skip short, ambiguous tokens (e.g. "уфа" handled below)
+                continue
             if lemma in tokens and lemma not in allowed_tokens:
                 return True
-        # Short but distinctive names (уфа, тула, орёл…) — exact lemma check.
         if len(city) < 4:
             lemma = _lemma(city)
             if lemma in tokens and lemma not in allowed_tokens:

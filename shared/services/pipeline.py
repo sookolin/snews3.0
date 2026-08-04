@@ -117,6 +117,21 @@ def _mentions_region(title: str | None, text: str, regions: set[str]) -> bool:
     return False
 
 
+def _region_lemmas(regions: set[str]) -> set[str]:
+    """Lemmas of every region name/synonym, so a Geox toponym that is really the
+    region (not a city inside it) is not mistaken for an unmonitored city."""
+    from shared.services.matcher import _lemma
+
+    lemmas: set[str] = set()
+    for region in regions:
+        for syn in _region_synonyms(region):
+            for part in syn.split():
+                lemma = _lemma(part)
+                if lemma:
+                    lemmas.add(lemma)
+    return lemmas
+
+
 #: Phrases indicating a country-wide (federal) Russian story. Kept narrow so a
 #: passing mention of "россия" in unrelated foreign news does not qualify.
 _RUSSIA_MARKERS = (
@@ -361,6 +376,7 @@ class IngestionPipeline:
             regions = {c.region for c in linked_cities if c.region}
             regions |= _regions_in_text(source.name)
             mentions_region = _mentions_region(item.title, item.text, regions)
+            region_lems = _region_lemmas(regions)
             in_russia = any(_is_russia(c.country) for c in linked_cities)
             federal = is_world or (in_russia and _mentions_russia(item.title, item.text))
 
@@ -370,7 +386,15 @@ class IngestionPipeline:
                 match_score = hits[0].score
                 matched_keywords: list[str] = hits[0].matched_keywords or []
             elif mentions_region:
-                # Region-wide (e.g. "Московская область"/"Подмосковье").
+                # Region-wide (e.g. "Московская область"/"Подмосковье") — but if
+                # it also names a specific city we do NOT monitor, it is about
+                # that other place inside the region, not the region as a whole
+                # → drop it (don't show anywhere).
+                if mentions_unmonitored_city(
+                    item.title, item.text, self._monitored_tokens, region_lems
+                ):
+                    report.unmatched += 1
+                    return []
                 target_cities = list(linked_cities)
                 match_score = 1.0
                 matched_keywords = []
@@ -380,7 +404,7 @@ class IngestionPipeline:
                 # an item is really about that other place and must be dropped
                 # entirely (not shown anywhere), even though it mentions Russia.
                 if mentions_unmonitored_city(
-                    item.title, item.text, self._monitored_tokens
+                    item.title, item.text, self._monitored_tokens, region_lems
                 ):
                     report.unmatched += 1
                     return []
