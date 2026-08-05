@@ -49,7 +49,15 @@ class UserUpdate(BaseModel):
 
 class UserOut(ORMModel):
     id: int
-    email: EmailStr
+    # Plain str, not EmailStr: accounts created by binding only a Telegram
+    # id get a synthesized placeholder address like
+    # "tg123@telegram.local" (see UserService.create) until the user sets
+    # a real email themselves. The ".local" TLD is a reserved/special-use
+    # domain that email-validator (used by EmailStr) rejects, which broke
+    # serializing the response right after creating such a user even
+    # though the row was saved fine. Output serialization doesn't need to
+    # re-validate the address, so a plain string is safe here.
+    email: str
     full_name: str | None
     role: str
     is_active: bool
