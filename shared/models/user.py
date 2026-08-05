@@ -50,6 +50,12 @@ class User(Base, TimestampMixin):
     #   {"grant": ["news:publish"], "deny": ["news:delete"]}
     permissions: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
+    # City access restriction: when non-empty, the user only sees/moderates
+    # news for these cities (by id). Empty/None means unrestricted (sees
+    # every city) — this is the default for existing roles, including
+    # super admin, who always has full access regardless of this field.
+    city_access: Mapped[list[int]] = mapped_column(JSONB, default=list, nullable=False)
+
     # Preferences
     language: Mapped[str] = mapped_column(String(8), default="ru", nullable=False)
 

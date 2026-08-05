@@ -26,6 +26,8 @@ class SourceBase(BaseModel):
     auth: dict = Field(default_factory=dict)
     selectors: dict = Field(default_factory=dict)
     city_ids: list[int] = Field(default_factory=list)
+    show_in_post: bool = True
+    auto_publish: bool = False
 
 
 class SourceCreate(SourceBase):
@@ -48,6 +50,8 @@ class SourceUpdate(BaseModel):
     auth: dict | None = None
     selectors: dict | None = None
     city_ids: list[int] | None = None
+    show_in_post: bool | None = None
+    auto_publish: bool | None = None
 
 
 class SourceOut(ORMModel):
@@ -66,6 +70,8 @@ class SourceOut(ORMModel):
     cookies: dict
     auth: dict
     selectors: dict
+    show_in_post: bool
+    auto_publish: bool
     last_checked_at: datetime | None
     last_success_at: datetime | None
     last_error: str | None

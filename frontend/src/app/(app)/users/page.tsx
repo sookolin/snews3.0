@@ -5,7 +5,7 @@ import useSWR from "swr";
 import Link from "next/link";
 import { Eye, Pencil, Settings2, Tags, Trash2, UserCircle, ShieldOff, Ban } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
-import type { Page, User } from "@/lib/types";
+import type { City, Page, User } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal, Field } from "@/components/Modal";
 import { Checkbox, Select } from "@/components/Controls";
@@ -38,6 +38,7 @@ interface UserForm {
   telegram_id?: number | null;
   telegram_username?: string | null;
   permissions: { grant?: string[]; deny?: string[] };
+  city_access: number[];
   password?: string;
 }
 
@@ -51,11 +52,12 @@ const FALLBACK_ROLE_LABELS: Record<string, string> = {
 
 const EMPTY: UserForm = {
   email: "", full_name: "", role: "reviewer", is_active: true, language: "ru",
-  telegram_id: null, telegram_username: "", permissions: {}, password: "",
+  telegram_id: null, telegram_username: "", permissions: {}, city_access: [], password: "",
 };
 
 export default function UsersPage() {
   const { data, mutate } = useSWR<Page<User>>("/users?size=100", fetcher);
+  const { data: cities } = useSWR<Page<City>>("/cities?size=200", fetcher);
   const { data: catalog } = useSWR<PermissionCatalog>("/users/permissions", fetcher);
   const { data: roleLabels, mutate: mutateLabels } =
     useSWR<Record<string, string>>("/users/role-labels", fetcher);
@@ -159,6 +161,7 @@ export default function UsersPage() {
       is_active: u.is_active, language: u.language, telegram_id: u.telegram_id ?? null,
       telegram_username: (u as { telegram_username?: string }).telegram_username ?? "",
       permissions: (u.permissions ?? {}) as UserForm["permissions"],
+      city_access: u.city_access ?? [],
       password: "",
     });
     setError(null);
@@ -174,6 +177,13 @@ export default function UsersPage() {
     if (deny.includes(p)) return "deny";
     if (grant.includes(p)) return "grant";
     return "role";
+  };
+
+  const toggleCityAccess = (cityId: number) => {
+    if (!form) return;
+    const ids = form.city_access ?? [];
+    const next = ids.includes(cityId) ? ids.filter((c) => c !== cityId) : [...ids, cityId];
+    upd({ city_access: next });
   };
 
   const setPermState = (p: string, next: "grant" | "deny" | "role") => {
@@ -200,6 +210,7 @@ export default function UsersPage() {
       telegram_id: form.telegram_id ?? null,
       telegram_username: form.telegram_username || null,
       permissions: form.permissions ?? {},
+      city_access: form.city_access ?? [],
     };
     if (form.id) {
       body.email = form.email;
@@ -357,6 +368,16 @@ export default function UsersPage() {
                     Неактивен
                   </span>
                 )}
+                {u.role !== "super_admin" && (u.city_access?.length ?? 0) > 0 && (
+                  <span
+                    className="badge bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:ring-indigo-900"
+                    title={(u.city_access ?? [])
+                      .map((id) => cities?.items.find((c) => c.id === id)?.name ?? `#${id}`)
+                      .join(", ")}
+                  >
+                    🏙 {u.city_access?.length} город{u.city_access?.length === 1 ? "" : "а"}
+                  </span>
+                )}
                 {u.is_active && !u.is_banned && !u.is_2fa_enabled && (
                   <span className="text-xs italic text-muted-foreground/60">активен</span>
                 )}
@@ -443,6 +464,42 @@ export default function UsersPage() {
               </div>
             </div>
             <Checkbox checked={form.is_active} onChange={(v) => upd({ is_active: v })} label="Активен" />
+
+            {/* City access restriction */}
+            {form.role !== "super_admin" && (
+              <div className="rounded-lg border border-border p-4">
+                <div className="mb-1 text-sm font-medium">Доступ по городам</div>
+                <p className="mb-2 text-xs text-muted-foreground">
+                  Если выбраны города, пользователь видит и модерирует новости только для них.
+                  Если ничего не выбрано — доступ без ограничений (все города).
+                </p>
+                <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto rounded-lg border border-border p-2">
+                  {(cities?.items ?? [])
+                    .filter((c) => c.kind === "city" || !c.kind)
+                    .sort((a, b) => a.name.localeCompare(b.name, "ru"))
+                    .map((c) => {
+                      const active = (form.city_access ?? []).includes(c.id);
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => toggleCityAccess(c.id)}
+                          className={`rounded-md border px-2.5 py-0.5 text-xs font-medium transition-colors ${
+                            active
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                          }`}
+                        >
+                          {c.name}
+                        </button>
+                      );
+                    })}
+                  {(cities?.items ?? []).length === 0 && (
+                    <span className="text-xs text-muted-foreground">Нет городов</span>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Granular permissions */}
             <div className="rounded-lg border border-border">

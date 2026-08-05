@@ -25,7 +25,10 @@ async def _set_interval(session, minutes: int) -> None:
 
 
 def _news(**kwargs) -> News:  # type: ignore[no-untyped-def]
-    defaults = dict(original_text="text", original_title="t", city_id=None)
+    # Spacing is now scoped per target channel/city; give every test item the
+    # same city so these generic queue-mechanics tests still exercise shared
+    # spacing (per-city isolation is covered separately).
+    defaults = dict(original_text="text", original_title="t", city_id=1)
     defaults.update(kwargs)
     return News(**defaults)
 
@@ -35,7 +38,7 @@ async def test_first_item_publishes_immediately(db_session, monkeypatch) -> None
     from workers import tasks
 
     sent: list[int] = []
-    monkeypatch.setattr(tasks.publish_news, "delay", lambda nid: sent.append(nid))
+    monkeypatch.setattr(tasks.publish_news, "delay", lambda nid, *a, **k: sent.append(nid))
 
     await _set_interval(db_session, 5)
     item = _news()
@@ -52,7 +55,7 @@ async def test_second_item_is_spaced_after_recent_publication(db_session, monkey
     """A just-published post pushes the next one into a future slot."""
     from workers import tasks
 
-    monkeypatch.setattr(tasks.publish_news, "delay", lambda nid: None)
+    monkeypatch.setattr(tasks.publish_news, "delay", lambda nid, *a, **k: None)
     await _set_interval(db_session, 10)
 
     now = datetime.now(timezone.utc)
@@ -77,7 +80,7 @@ async def test_queue_stacks_multiple_approvals(db_session, monkeypatch) -> None:
     """Approving three items in a row yields three increasing slots."""
     from workers import tasks
 
-    monkeypatch.setattr(tasks.publish_news, "delay", lambda nid: None)
+    monkeypatch.setattr(tasks.publish_news, "delay", lambda nid, *a, **k: None)
     await _set_interval(db_session, 5)
 
     now = datetime.now(timezone.utc)
@@ -101,7 +104,7 @@ async def test_immediate_flag_skips_the_queue(db_session, monkeypatch) -> None:
     from workers import tasks
 
     sent: list[int] = []
-    monkeypatch.setattr(tasks.publish_news, "delay", lambda nid: sent.append(nid))
+    monkeypatch.setattr(tasks.publish_news, "delay", lambda nid, *a, **k: sent.append(nid))
     await _set_interval(db_session, 30)
 
     now = datetime.now(timezone.utc)

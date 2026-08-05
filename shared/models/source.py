@@ -56,6 +56,18 @@ class Source(Base, TimestampMixin):
     timeout_seconds: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    #: When on, the source's name is shown in the published post (as the
+    #: {source} placeholder, per the template). When off, news from this
+    #: source publish with no source line, regardless of a manual override on
+    #: the news item itself (the per-post "Скрыть источник" checkbox still
+    #: wins if set explicitly).
+    show_in_post: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    #: When on, news discovered from this source are approved and published
+    #: automatically (no manual moderation step) as soon as AI processing
+    #: finishes, subject to the normal publication queue/spacing.
+    auto_publish: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     # Fetch behaviour
     use_proxy: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     proxy_url: Mapped[str | None] = mapped_column(String(2048))

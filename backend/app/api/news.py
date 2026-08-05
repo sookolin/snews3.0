@@ -10,7 +10,7 @@ from sqlalchemy import func, or_, select
 
 from backend.app.deps import ClientMeta, DBSession, require_permission
 from shared.enums import NewsStatus, Permission
-from shared.exceptions import NotFoundError
+from shared.exceptions import NotFoundError, PermissionDeniedError
 from shared.models.news import News
 from shared.models.user import User
 from shared.schemas.common import Message, Page, PaginationParams
@@ -22,6 +22,7 @@ from shared.schemas.news import (
     NewsVersionOut,
     _target_ids_from_orm,
 )
+from shared.security import user_city_access
 from shared.services.audit_service import AuditService
 from shared.services.version_service import VersionService
 
@@ -41,13 +42,31 @@ async def list_news(
         description="'world' → only world news, 'city' → only city news",
     ),
     search: str | None = Query(default=None, description="Full-text search"),
-    _: User = Depends(require_permission(Permission.NEWS_VIEW)),
+    actor: User = Depends(require_permission(Permission.NEWS_VIEW)),
 ) -> Page[NewsListItem]:
-    """List news with filtering and search."""
+    """List news with filtering and search.
+
+    City-restricted users (a role with configured «Доступ по городам») only
+    see items belonging to a city they have access to — either the primary
+    city or, for multi-city items, at least one of the target cities.
+    """
     stmt = select(News)
     count_stmt = select(func.count()).select_from(News)
 
     conditions = []
+    allowed_cities = user_city_access(actor)
+    if allowed_cities is not None:
+        from shared.models.news import news_target_cities
+
+        access_cond = or_(
+            News.city_id.in_(allowed_cities),
+            News.id.in_(
+                select(news_target_cities.c.news_id).where(
+                    news_target_cities.c.city_id.in_(allowed_cities)
+                )
+            ),
+        )
+        conditions.append(access_cond)
     if status:
         conditions.append(News.status == status)
     if scope == "world":
@@ -114,12 +133,30 @@ async def list_news(
     return Page.create(items, total, params)
 
 
-async def _get_news(session: DBSession, news_id: int) -> News:
+async def _get_news(session: DBSession, news_id: int, actor: User | None = None) -> News:
     news = await session.get(News, news_id)
     if news is None:
         raise NotFoundError(f"News {news_id} not found")
     await session.refresh(news)
+    if actor is not None:
+        await _check_city_access(session, news, actor)
     return news
+
+
+async def _check_city_access(session, news: News, actor: User) -> None:  # type: ignore[no-untyped-def]
+    """Enforce city-scoped RBAC: the actor must have access to at least one
+    of the news item's target cities (or its primary city).
+    """
+    allowed = user_city_access(actor)
+    if allowed is None:
+        return
+    await session.refresh(news, attribute_names=["target_cities"])
+    target_ids = [c.id for c in (news.target_cities or [])] or (
+        [news.city_id] if news.city_id else []
+    )
+    if not target_ids or any(cid in allowed for cid in target_ids):
+        return
+    raise PermissionDeniedError("Нет доступа к этому городу", code="city_access_denied")
 
 
 def _news_out(news: News) -> NewsOut:
@@ -179,9 +216,9 @@ async def create_news(
 async def get_news(
     news_id: int,
     session: DBSession,
-    _: User = Depends(require_permission(Permission.NEWS_VIEW)),
+    actor: User = Depends(require_permission(Permission.NEWS_VIEW)),
 ) -> NewsOut:
-    news = await _get_news(session, news_id)
+    news = await _get_news(session, news_id, actor)
     return _news_out(news)
 
 
@@ -194,7 +231,7 @@ async def update_news(
     actor: User = Depends(require_permission(Permission.NEWS_EDIT)),
 ) -> NewsOut:
     """Edit a news item; snapshots the prior state for version history."""
-    news = await _get_news(session, news_id)
+    news = await _get_news(session, news_id, actor)
 
     # Snapshot before applying changes.
     await VersionService(session).snapshot(news, edited_by=actor.id, comment=payload.edit_comment)
@@ -273,10 +310,40 @@ async def approve_news(
     publish: bool = True,
     actor: User = Depends(require_permission(Permission.NEWS_MODERATE)),
 ) -> NewsOut:
-    """Approve a news item and optionally enqueue publication."""
-    news = await _get_news(session, news_id)
-    news.status = NewsStatus.APPROVED
+    """Approve a news item and optionally enqueue publication.
+
+    City-restricted moderators only approve/publish the target cities they
+    have access to. For a multi-city item this is a *partial* approval: the
+    item is sent to the channels of the accessible cities now and stays
+    pending for the rest, tracked via ``approved_city_ids``. A user with full
+    access (e.g. super admin) sees it as still awaiting approval for the
+    remaining cities and can approve those separately, at which point it goes
+    out to those additional channels without duplicating already-published
+    ones.
+    """
+    news = await _get_news(session, news_id, actor)
+
+    await session.refresh(news, attribute_names=["target_cities"])
+    all_target_ids = [c.id for c in (news.target_cities or [])] or (
+        [news.city_id] if news.city_id else []
+    )
+    allowed = user_city_access(actor)
+    # Restrict this approval to the cities the actor may access; unrestricted
+    # users (None) approve every remaining target city.
+    already_approved = set(news.approved_city_ids or [])
+    if allowed is None:
+        approve_now = [cid for cid in all_target_ids if cid not in already_approved]
+    else:
+        approve_now = [
+            cid for cid in all_target_ids if cid in allowed and cid not in already_approved
+        ]
+    if not approve_now:
+        raise PermissionDeniedError(
+            "Нет доступных для одобрения городов у этой новости", code="city_access_denied"
+        )
+
     news.moderated_by = actor.id
+    news.status = NewsStatus.APPROVED
     await session.flush()
 
     await AuditService(session).log(
@@ -285,6 +352,7 @@ async def approve_news(
         actor=actor.email,
         entity_type="news",
         entity_id=news_id,
+        changes={"city_ids": approve_now},
         **meta,
     )
 
@@ -295,21 +363,44 @@ async def approve_news(
     if publish:
         if news.scheduled_at and news.scheduled_at > datetime.now(timezone.utc):
             news.status = NewsStatus.SCHEDULED
+            approved = set(news.approved_city_ids or [])
+            approved.update(approve_now)
+            news.approved_city_ids = sorted(approved)
             slot = news.scheduled_at.strftime("%H:%M")
         else:
             # Queue with spacing so several approvals do not flood the channel.
             from workers.tasks import _schedule_publication
 
-            slot = await _schedule_publication(session, news)
+            slot = await _schedule_publication(session, news, city_ids=approve_now)
+
+    # If some target cities remain unapproved (partial approval), the item
+    # is not fully resolved yet — keep it visible to moderators of the
+    # remaining cities as still awaiting a decision.
+    remaining = [cid for cid in all_target_ids if cid not in set(news.approved_city_ids or [])]
+    if remaining and news.status not in (NewsStatus.PUBLISHED,):
+        news.status = NewsStatus.PENDING if slot == "—" else news.status
     await session.flush()
 
-    # Reflect the decision on the moderation card and drop its buttons.
+    # Reflect the decision on the moderation card and drop its buttons only
+    # once every target city has been approved.
     from shared.services.news_moderation import NewsModerationService
 
     who = actor.full_name or actor.email
     queued = "" if slot in ("immediate", "—") else f" · в очереди на {slot}"
+    partial_note = ""
+    if remaining:
+        from shared.models.city import City as _City
+
+        names = (
+            await session.scalars(select(_City.name).where(_City.id.in_(remaining)))
+        ).all()
+        partial_note = f" · ожидает одобрения для: {', '.join(names)}"
+    approved_note = ", ".join(str(c) for c in approve_now)
+    status_line = f"✅ Одобрено ({approved_note}) · {who}{queued}{partial_note}"
     await NewsModerationService(session).update_card(
-        news, status_line=f"✅ Одобрено · {who}{queued}", keep_buttons=True
+        news,
+        status_line=status_line,
+        keep_buttons=bool(remaining),
     )
     await session.refresh(news)
     return _news_out(news)
@@ -323,7 +414,7 @@ async def reject_news(
     reason: str | None = None,
     actor: User = Depends(require_permission(Permission.NEWS_MODERATE)),
 ) -> NewsOut:
-    news = await _get_news(session, news_id)
+    news = await _get_news(session, news_id, actor)
     news.status = NewsStatus.REJECTED
     news.moderated_by = actor.id
     news.rejection_reason = reason
@@ -436,7 +527,7 @@ async def render_news_preview(
         )
         if not source_name and news.source_id:
             src = await session.get(Source, news.source_id)
-            source_name = src.name if src else ""
+            source_name = src.name if (src and src.show_in_post) else ""
 
     anonymous = (
         payload.submitted_anonymously
@@ -533,7 +624,7 @@ async def render_news(
     source_name = ""
     if news.source_id:
         src = await session.get(Source, news.source_id)
-        if src:
+        if src and src.show_in_post:
             source_name = src.name
     city_name = ""
     if news.city_id:
@@ -602,7 +693,7 @@ async def unpublish_news(
     """
     from shared.services.news_moderation import NewsModerationService
 
-    news = await _get_news(session, news_id)
+    news = await _get_news(session, news_id, actor)
     service = NewsModerationService(session)
     removed = await service.delete_published(news)
     # WITHDRAWN records that the post *was* live and is now taken down; it can
@@ -661,8 +752,29 @@ async def publish_now(
     places the item into the scheduled queue. Use ``/approve`` (from the
     moderation card) when queue-based spacing is desired.
     """
-    news = await _get_news(session, news_id)
-    if news.published_message_ids:
+    news = await _get_news(session, news_id, actor)
+
+    await session.refresh(news, attribute_names=["target_cities"])
+    all_target_ids = [c.id for c in (news.target_cities or [])] or (
+        [news.city_id] if news.city_id else []
+    )
+    allowed = user_city_access(actor)
+    already_approved = set(news.approved_city_ids or [])
+    if allowed is None:
+        approve_now = [cid for cid in all_target_ids if cid not in already_approved]
+    else:
+        approve_now = [
+            cid for cid in all_target_ids if cid in allowed and cid not in already_approved
+        ]
+    if not approve_now:
+        from shared.exceptions import ValidationError
+
+        raise ValidationError("Нет доступных для публикации городов у этой новости")
+
+    already_published_chats = set((news.published_message_ids or {}).keys())
+    if not already_published_chats:
+        pass
+    elif set(approve_now) <= already_approved and already_published_chats:
         from shared.exceptions import ValidationError
 
         raise ValidationError("Новость уже опубликована — сначала снимите публикацию")
@@ -673,11 +785,14 @@ async def publish_now(
         news.moderated_by = actor.id
     if news.processed_at is None:
         news.processed_at = datetime.now(timezone.utc)
+    approved = set(news.approved_city_ids or [])
+    approved.update(approve_now)
+    news.approved_city_ids = sorted(approved)
     await session.flush()
 
     from workers.tasks import publish_news as publish_task
 
-    publish_task.delay(news.id)
+    publish_task.delay(news.id, approve_now)
 
     await AuditService(session).log(
         "news.publish",
@@ -685,7 +800,7 @@ async def publish_now(
         actor=actor.email,
         entity_type="news",
         entity_id=news_id,
-        changes={"slot": "immediate"},
+        changes={"slot": "immediate", "city_ids": approve_now},
         **meta,
     )
     await session.refresh(news)
@@ -776,7 +891,7 @@ async def delete_news(
     meta: ClientMeta,
     actor: User = Depends(require_permission(Permission.NEWS_DELETE)),
 ) -> Message:
-    news = await _get_news(session, news_id)
+    news = await _get_news(session, news_id, actor)
 
     # Remove the post from Telegram and mark the moderation card as deleted
     # before the row disappears.

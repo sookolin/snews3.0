@@ -137,10 +137,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             </button>
           )}
 
-          {/* Profile link */}
+          {/* Profile link — round hit-area matching the round avatar, so no
+              square corners show outside the circular image/ring. */}
           <Link
             href="/profile"
-            className="btn-icon flex items-center gap-1.5"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-transform duration-200 ease-out hover:scale-105 active:scale-90"
             title={`${me?.full_name || me?.email || "Профиль"} · ${labels[me?.role ?? ""] ?? me?.role ?? ""}`}
             aria-label="Личный кабинет"
           >

@@ -17,7 +17,7 @@ from shared.enums import NewsStatus, Permission
 from shared.i18n import t
 from shared.logging import get_logger
 from shared.models.news import News
-from shared.security import user_has_permission
+from shared.security import user_has_permission, user_city_access
 from shared.services.user_service import UserService
 
 router = Router(name="moderation")
@@ -94,11 +94,32 @@ async def _approve(
         if news is None:
             await callback.answer("Новость не найдена", show_alert=True)
             return
-        if news.published_message_ids:
+
+        user = await UserService(session).get_by_telegram_id(callback.from_user.id)
+
+        # Resolve which of this item's target cities this moderator may
+        # approve (city-restricted RBAC supports partial approval).
+        await session.refresh(news, attribute_names=["target_cities"])
+        all_target_ids = [c.id for c in (news.target_cities or [])] or (
+            [news.city_id] if news.city_id else []
+        )
+        allowed = user_city_access(user) if user else None
+        already_approved = set(news.approved_city_ids or [])
+        if allowed is None:
+            approve_now = [cid for cid in all_target_ids if cid not in already_approved]
+        else:
+            approve_now = [
+                cid for cid in all_target_ids if cid in allowed and cid not in already_approved
+            ]
+        if not approve_now:
+            await callback.answer("Нет доступных для одобрения городов", show_alert=True)
+            return
+
+        already_published_chats = set((news.published_message_ids or {}).keys())
+        if already_published_chats and set(approve_now) <= already_approved:
             await callback.answer("Новость уже опубликована", show_alert=True)
             return
 
-        user = await UserService(session).get_by_telegram_id(callback.from_user.id)
         news.status = NewsStatus.APPROVED
         news.moderated_by = user.id if user else None
         news.processed_at = datetime.now(timezone.utc)
@@ -110,13 +131,14 @@ async def _approve(
         try:
             from workers.tasks import _schedule_publication
 
-            slot = await _schedule_publication(session, news)
+            slot = await _schedule_publication(session, news, city_ids=approve_now)
         except Exception as exc:  # noqa: BLE001
             log.warning("publish_enqueue_failed", news=news_id, error=str(exc))
         await session.commit()
 
     # A news item already carries its own target cities and the normal publish
-    # path sends it to all of their channels in one go.
+    # path sends it to all of their channels in one go (or a subset, for a
+    # city-restricted moderator's partial approval).
     await callback.answer(t("moderation.approved", lang))
     suffix = "" if slot == "immediate" else f" · в очереди на {slot}"
     await _mark_card(

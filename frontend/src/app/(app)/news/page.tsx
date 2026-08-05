@@ -450,14 +450,26 @@ export default function NewsPage() {
                         {((n.target_city_ids && n.target_city_ids.length > 0)
                           ? n.target_city_ids
                           : (n.city_id ? [n.city_id] : [])
-                        ).map((cid) => (
-                          <span
-                            key={cid}
-                            className="badge bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:ring-indigo-900"
-                          >
-                            {cityName(cid)}
-                          </span>
-                        ))}
+                        ).map((cid) => {
+                          // Colour a target city's tag green once it has been
+                          // approved/published for it — lets a moderator with
+                          // full access see, at a glance, which cities of a
+                          // multi-city post are still pending their decision.
+                          const done = (n.approved_city_ids ?? []).includes(cid);
+                          return (
+                            <span
+                              key={cid}
+                              title={done ? "Опубликовано в этот город" : "Ожидает одобрения"}
+                              className={
+                                done
+                                  ? "badge bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:ring-emerald-900"
+                                  : "badge bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:ring-indigo-900"
+                              }
+                            >
+                              {cityName(cid)}
+                            </span>
+                          );
+                        })}
                       </div>
                     )}
                   </td>

@@ -82,19 +82,22 @@ class PublisherService:
             raise NotFoundError("No publication template configured")
         return template
 
-    async def publish(self, news_id: int) -> News:
-        """Publish a single news item. Returns the updated ``News``."""
+    async def publish(self, news_id: int, city_ids: list[int] | None = None) -> News:
+        """Publish a single news item. Returns the updated ``News``.
+
+        ``city_ids``, when given, restricts this call to only the channels of
+        those target cities — used for partial approval, where a moderator
+        with restricted city access approves/publishes only their accessible
+        cities while the item stays pending for the rest. Already-published
+        channels are never re-published; the item's ``published_message_ids``
+        accumulate across calls and the status only becomes ``PUBLISHED`` once
+        every target city's channels have been covered.
+        """
         news = await self.session.get(News, news_id)
         if news is None:
             raise NotFoundError(f"News {news_id} not found")
         if news.city_id is None:
             raise PublishError("Нельзя публиковать новость без города")
-        # Guard against double publication: an already published post must be
-        # withdrawn first, otherwise it would be duplicated in the channel.
-        if news.published_message_ids:
-            raise PublishError(
-                "Новость уже опубликована. Снимите публикацию, чтобы опубликовать заново."
-            )
 
         # Ensure relationships are loaded.
         await self.session.refresh(news, attribute_names=["media", "city", "target_cities"])
@@ -102,15 +105,34 @@ class PublisherService:
         # Publish to the channels of EVERY target city (multi-channel post),
         # falling back to just the primary city for legacy items with no
         # explicit targets.
-        target_city_ids = [c.id for c in (news.target_cities or [])] or [news.city_id]
+        all_target_city_ids = [c.id for c in (news.target_cities or [])] or [news.city_id]
+        # This call only touches the requested subset (default: all targets).
+        call_city_ids = (
+            [cid for cid in city_ids if cid in all_target_city_ids]
+            if city_ids is not None
+            else all_target_city_ids
+        )
+        if not call_city_ids:
+            raise PublishError("Нет доступных для публикации городов")
+
+        already_published_chats = set((news.published_message_ids or {}).keys())
+
         channels = (
             await self.session.scalars(
                 select(Channel).where(
-                    Channel.city_id.in_(target_city_ids), Channel.is_active.is_(True)
+                    Channel.city_id.in_(call_city_ids), Channel.is_active.is_(True)
                 )
             )
         ).all()
+        # Never republish a channel that already has a live message for this
+        # news (double-publication guard, now scoped per channel instead of
+        # the whole item so partial approval keeps working).
+        channels = [c for c in channels if c.chat_id not in already_published_chats]
         if not channels:
+            if already_published_chats:
+                # Everything requested is already live — nothing to do, but
+                # this is not an error (e.g. re-approving the same cities).
+                return news
             raise PublishError("У целевых городов нет активных каналов")
 
         # Map city_id → City for per-channel template + {city} placeholder.
@@ -119,7 +141,7 @@ class PublisherService:
         cities_by_id = {
             c.id: c
             for c in (
-                await self.session.scalars(select(_City).where(_City.id.in_(target_city_ids)))
+                await self.session.scalars(select(_City).where(_City.id.in_(all_target_city_ids)))
             ).all()
         }
 
@@ -145,7 +167,7 @@ class PublisherService:
                 source_name = news.source_name
             elif news.source_id:
                 source = await self.session.get(Source, news.source_id)
-                if source:
+                if source and source.show_in_post:
                     source_name = source.name
 
         # Author: show the author name unless it was explicitly hidden.
@@ -246,16 +268,48 @@ class PublisherService:
             else:
                 errors.append(f"{channel.title}: {result.error}")
 
-        news.published_message_ids = published
+        # Merge into whatever was already published (previous partial-approval
+        # calls for other target cities), instead of overwriting it.
+        merged = dict(news.published_message_ids or {})
+        merged.update(published)
+        news.published_message_ids = merged
+
+        # Track which target cities are now covered so the item is only
+        # considered fully PUBLISHED once every target city's channels have
+        # received it. Cities with no active channel count as covered so they
+        # never block completion.
+        approved = set(news.approved_city_ids or [])
+        approved.update(call_city_ids)
+        news.approved_city_ids = sorted(approved)
+
+        covered_chat_ids = set(merged.keys())
+        all_channels = (
+            await self.session.scalars(
+                select(Channel).where(
+                    Channel.city_id.in_(all_target_city_ids), Channel.is_active.is_(True)
+                )
+            )
+        ).all()
+        remaining = [c for c in all_channels if c.chat_id not in covered_chat_ids]
+
         if published:
-            news.status = NewsStatus.PUBLISHED
             news.published_at = datetime.now(timezone.utc)
             news.error = "; ".join(errors) if errors else None
-        else:
+            # PUBLISHED as soon as it is live somewhere — a super admin (full
+            # access) still sees the remaining target cities and can approve
+            # them to finish the rollout to every channel.
+            news.status = NewsStatus.PUBLISHED
+        elif not merged:
             news.status = NewsStatus.FAILED
             news.error = "; ".join(errors) or "No channels published"
+            await self.session.flush()
             raise PublishError(news.error)
 
         await self.session.flush()
-        log.info("news_published", news=news.id, channels=len(published))
+        log.info(
+            "news_published",
+            news=news.id,
+            channels=len(published),
+            remaining_cities=[c.city_id for c in remaining],
+        )
         return news

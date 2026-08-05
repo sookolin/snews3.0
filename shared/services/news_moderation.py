@@ -32,14 +32,19 @@ class NewsModerationService:
 
     # ── rendering ───────────────────────────────────────────────────────────
     async def resolve_source_name(self, news: News) -> str:
-        """Effective source label (manual override wins, hidden → empty)."""
+        """Effective source label (manual override wins, hidden → empty).
+
+        When the linked source has "Отображать источник" turned off, the
+        source line is suppressed for its news (unless the post has an
+        explicit manual override name, which always wins).
+        """
         if news.hide_source:
             return ""
         if news.source_name:
             return news.source_name
         if news.source_id:
             source = await self.session.get(Source, news.source_id)
-            if source:
+            if source and source.show_in_post:
                 return source.name
         return ""
 

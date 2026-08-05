@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from shared.database import session_scope
 from shared.enums import ChannelPublishMode, NewsStatus
@@ -178,13 +178,70 @@ def dispatch_due_sources() -> dict:
     return run_async(_run())
 
 
-async def _schedule_publication(session, news: News) -> str:  # type: ignore[no-untyped-def]
+async def _news_target_city_ids(session, news: News) -> list[int]:  # type: ignore[no-untyped-def]
+    """Resolve the set of city ids ``news`` will publish to.
+
+    Prefers the loaded ``target_cities`` relationship; falls back to a fresh
+    query against the association table, then to the primary ``city_id``.
+    """
+    from shared.models.news import news_target_cities
+
+    ids: list[int] = []
+    try:
+        ids = [c.id for c in (news.target_cities or [])]
+    except Exception:  # noqa: BLE001 - relationship may not be loaded
+        ids = []
+    if not ids:
+        ids = (
+            await session.scalars(
+                select(news_target_cities.c.city_id).where(
+                    news_target_cities.c.news_id == news.id
+                )
+            )
+        ).all()
+    if not ids and news.city_id:
+        ids = [news.city_id]
+    return list(ids)
+
+
+def _same_channel_condition(News, target_city_ids: list[int]):  # type: ignore[no-untyped-def]
+    """SQL condition matching other News rows sharing at least one target city.
+
+    Spacing must be computed per destination channel (city), not globally:
+    a post going out in city A must not push back the queue for city B.
+    """
+    from shared.models.news import news_target_cities
+
+    if not target_city_ids:
+        return News.id.is_(None)  # matches nothing
+    return or_(
+        News.city_id.in_(target_city_ids),
+        News.id.in_(
+            select(news_target_cities.c.news_id).where(
+                news_target_cities.c.city_id.in_(target_city_ids)
+            )
+        ),
+    )
+
+
+async def _schedule_publication(session, news: News, city_ids: list[int] | None = None) -> str:  # type: ignore[no-untyped-def]
     """Queue a news item for publication, spacing posts apart.
 
     Approving several items at once should not dump them all into the channel:
     each new item is scheduled ``pipeline.publish_interval_minutes`` after the
-    last already-queued one. Items flagged ``publish_immediately`` jump the
-    queue and go out at once.
+    last already-queued one *for the same target channel(s)*. Items flagged
+    ``publish_immediately`` jump the queue and go out at once.
+
+    Spacing is scoped to the news' own target cities: publishing in one city
+    (channel) must never delay or "consume" the queue slot of a different
+    city's channel. Without this, approving a post for city B right after
+    publishing in city A would incorrectly push the city-B post into the
+    scheduled queue, even though city B's channel had no recent activity.
+
+    ``city_ids``, when given, restricts this approval to a subset of the
+    item's target cities (partial approval by a city-restricted moderator);
+    only those cities are considered for spacing and passed through to the
+    eventual ``publish_news`` call.
     """
     from shared.enums import NewsStatus
     from shared.services.settings_service import SettingsService
@@ -192,7 +249,7 @@ async def _schedule_publication(session, news: News) -> str:  # type: ignore[no-
     if news.publish_immediately:
         news.scheduled_at = None
         news.status = NewsStatus.APPROVED
-        publish_news.delay(news.id)
+        publish_news.delay(news.id, city_ids)
         return "immediate"
 
     interval = int(
@@ -201,23 +258,32 @@ async def _schedule_publication(session, news: News) -> str:  # type: ignore[no-
     if interval <= 0:
         news.scheduled_at = None
         news.status = NewsStatus.APPROVED
-        publish_news.delay(news.id)
+        publish_news.delay(news.id, city_ids)
         return "immediate"
 
     now = datetime.now(timezone.utc)
     gap = timedelta(minutes=interval)
 
+    target_city_ids = city_ids if city_ids is not None else await _news_target_city_ids(session, news)
+    same_channel = _same_channel_condition(News, target_city_ids)
+
     # The next free slot must clear both the pending queue and the most recent
-    # actual publication, otherwise a burst of approvals would all go at once.
+    # actual publication FOR THE SAME CHANNEL(S), otherwise a burst of
+    # approvals would all go at once — and activity in another city's channel
+    # must not affect this one.
     last_scheduled = await session.scalar(
         select(func.max(News.scheduled_at)).where(
             News.status == NewsStatus.SCHEDULED,
             News.scheduled_at.is_not(None),
             News.scheduled_at >= now,
+            same_channel,
         )
     )
     last_published = await session.scalar(
-        select(func.max(News.published_at)).where(News.published_at.is_not(None))
+        select(func.max(News.published_at)).where(
+            News.published_at.is_not(None),
+            same_channel,
+        )
     )
     # Also consider items just approved for immediate publication whose publish
     # task may still be in flight (published_at not written yet). Only recent
@@ -231,6 +297,7 @@ async def _schedule_publication(session, news: News) -> str:  # type: ignore[no-
             News.processed_at.is_not(None),
             News.processed_at >= now - gap,
             News.id != news.id,
+            same_channel,
         )
     )
 
@@ -253,15 +320,21 @@ async def _schedule_publication(session, news: News) -> str:  # type: ignore[no-
     if slot <= now:
         news.scheduled_at = None
         news.status = NewsStatus.APPROVED
-        publish_news.delay(news.id)
+        publish_news.delay(news.id, city_ids)
         return "immediate"
 
     news.scheduled_at = slot
     news.status = NewsStatus.SCHEDULED
+    # Remember which cities this approval covers so the scheduled-publish task
+    # only sends to those (partial approval survives the wait for the slot).
+    approved = set(news.approved_city_ids or [])
+    approved.update(target_city_ids)
+    news.approved_city_ids = sorted(approved)
     log.info(
         "publication_scheduled",
         news=news.id,
         interval_min=interval,
+        target_city_ids=target_city_ids,
         minutes_ahead=round((slot - now).total_seconds() / 60, 1),
         last_scheduled=str(last_scheduled),
         last_published=str(last_published),
@@ -306,12 +379,17 @@ async def _refresh_card_after_publish(session, news: News) -> None:  # type: ign
 
 
 @celery_app.task(name="workers.tasks.publish_news", bind=True, max_retries=3)
-def publish_news(self, news_id: int) -> dict:  # type: ignore[no-untyped-def]
-    """Publish an approved news item to its city's channels."""
+def publish_news(self, news_id: int, city_ids: list[int] | None = None) -> dict:  # type: ignore[no-untyped-def]
+    """Publish an approved news item to its city's channels.
+
+    ``city_ids`` restricts publication to a subset of the item's target
+    cities — used for partial approval by moderators with restricted city
+    access. Omitted/``None`` publishes to every target city, as before.
+    """
 
     async def _run() -> dict:
         async with session_scope() as session:
-            news = await PublisherService(session).publish(news_id)
+            news = await PublisherService(session).publish(news_id, city_ids=city_ids)
             await session.commit()
             # Refresh the moderation card so it switches to the published button
             # set (снять с публикации / удалить полностью) instead of keeping the
@@ -357,7 +435,7 @@ def publish_scheduled_news() -> dict:
                     for c in channels
                 ):
                     continue
-                publish_news.delay(news.id)
+                publish_news.delay(news.id, news.approved_city_ids or None)
                 count += 1
         return {"scheduled_published": count}
 

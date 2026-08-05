@@ -136,3 +136,29 @@ def user_has_permission(user: object, permission: Permission) -> bool:
     if role is None:
         return False
     return has_permission(role, permission)
+
+
+# ── City access (RBAC scoping) ──────────────────────────────────────────────
+def user_city_access(user: object) -> list[int] | None:
+    """Return the list of city ids ``user`` is restricted to, or ``None``.
+
+    ``None`` means unrestricted access to every city. Super admins are always
+    unrestricted regardless of their ``city_access`` field.
+    """
+    role = getattr(user, "role", None)
+    if role == UserRole.SUPER_ADMIN:
+        return None
+    ids = getattr(user, "city_access", None) or []
+    return list(ids) if ids else None
+
+
+def user_can_access_city(user: object, city_id: int | None) -> bool:
+    """True if ``user`` may see/moderate news tied to ``city_id``.
+
+    ``city_id`` of ``None`` (e.g. world/unassigned news) is always visible —
+    city restriction only scopes real cities.
+    """
+    allowed = user_city_access(user)
+    if allowed is None or city_id is None:
+        return True
+    return city_id in allowed

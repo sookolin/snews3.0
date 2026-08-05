@@ -145,6 +145,13 @@ class News(Base, TimestampMixin):
     published_message_ids: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     error: Mapped[str | None] = mapped_column(Text)
 
+    #: City ids that have already been approved for this (possibly multi-city)
+    #: item. Used to support partial approval: a moderator whose access is
+    #: restricted to some cities only approves/publishes to those; the item
+    #: stays pending for the remaining target cities until someone with
+    #: access to them (or a super admin) approves it too.
+    approved_city_ids: Mapped[list[int]] = mapped_column(JSONB, default=list, nullable=False)
+
     city: Mapped[City | None] = relationship(back_populates="news")
     #: All cities this item should be published to. When empty, the item targets
     #: only ``city_id`` (backwards compatible). The primary ``city_id`` stays the

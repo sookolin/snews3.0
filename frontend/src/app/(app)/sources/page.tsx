@@ -48,6 +48,7 @@ export default function SourcesPage() {
     setForm({
       name: "", url: "", type: "rss", parser_engine: "auto",
       check_interval_seconds: 300, is_active: true, city_ids: [],
+      show_in_post: true, auto_publish: false,
     });
   const openEdit = (s: Source) => setForm({ ...s });
   const upd = (patch: Partial<Source>) => setForm((f) => ({ ...f!, ...patch }));
@@ -323,6 +324,16 @@ export default function SourcesPage() {
               onChange={(v) => upd({ is_active: v })}
               label="Активен (опрашивать источник)"
             />
+            <Checkbox
+              checked={form.show_in_post ?? true}
+              onChange={(v) => upd({ show_in_post: v })}
+              label="Отображать источник в посте"
+            />
+            <Checkbox
+              checked={form.auto_publish ?? false}
+              onChange={(v) => upd({ auto_publish: v })}
+              label="Автопубликация (без модерации)"
+            />
             <div className="flex justify-end border-t border-border pt-4">
               <button className="btn-primary" onClick={save}>Сохранить</button>
             </div>
@@ -354,7 +365,19 @@ export default function SourcesPage() {
               return (
                 <tr key={s.id} className={`border-t border-border${!s.is_active ? " opacity-50" : ""}`}>
                   <td className="px-4 py-3">
-                    <div className="font-medium">{s.name}</div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-medium">{s.name}</span>
+                      {s.auto_publish && (
+                        <span className="badge bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-900" title="Автопубликация">
+                          авто
+                        </span>
+                      )}
+                      {s.show_in_post === false && (
+                        <span className="badge bg-slate-50 text-slate-600 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700" title="Источник скрыт в посте">
+                          скрыт
+                        </span>
+                      )}
+                    </div>
                     <div className="max-w-xs truncate text-xs text-muted-foreground">{s.url}</div>
                   </td>
                   <td className="px-4 py-3">

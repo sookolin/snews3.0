@@ -527,6 +527,19 @@ class IngestionPipeline:
 
         news.status = NewsStatus.PENDING
         await self.session.flush()
+
+        # Auto-publication: sources with "Автопубликация" skip manual
+        # moderation and go straight into the publication queue.
+        if source.auto_publish:
+            news.moderated_by = None
+            news.processed_at = datetime.now(timezone.utc)
+            news.status = NewsStatus.APPROVED
+            await self.session.flush()
+            from workers.tasks import _schedule_publication
+
+            await _schedule_publication(self.session, news)
+            await self.session.flush()
+
         return news.id
 
     async def _find_follow_up_target(self, item: ParsedItem, city_id: int) -> int | None:

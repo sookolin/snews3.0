@@ -41,6 +41,8 @@ export interface Source {
   auth?: Record<string, unknown>;
   selectors?: Record<string, unknown>;
   city_ids?: number[];
+  show_in_post?: boolean;
+  auto_publish?: boolean;
   last_checked_at?: string;
   last_error?: string;
   error_count: number;
@@ -79,6 +81,8 @@ export interface NewsItem {
   is_edited?: boolean;
   is_world_news?: boolean;
   published_message_ids?: Record<string, number[]>;
+  /** Target city ids already approved/published (partial multi-city approval). */
+  approved_city_ids?: number[];
   media?: NewsMedia[];
   scheduled_at?: string;
   published_at?: string;
@@ -129,6 +133,8 @@ export interface User {
   photo_url?: string | null;
   last_login_at?: string | null;
   permissions?: { grant?: string[]; deny?: string[] };
+  /** Restrict this user to the listed city ids; empty = unrestricted. */
+  city_access?: number[];
 }
 
 /** Personal cabinet payload (`GET /profile`). */

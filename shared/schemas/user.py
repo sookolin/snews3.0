@@ -24,6 +24,8 @@ class UserCreate(BaseModel):
     is_active: bool = True
     language: str = "ru"
     permissions: dict = Field(default_factory=dict)
+    #: Restrict this user to only the listed cities (empty = unrestricted).
+    city_access: list[int] = Field(default_factory=list)
     email: EmailStr | None = None
     full_name: str | None = None
     password: str | None = Field(default=None, min_length=8, max_length=128)
@@ -38,6 +40,7 @@ class UserUpdate(BaseModel):
     telegram_id: int | None = None
     telegram_username: str | None = None
     permissions: dict | None = None
+    city_access: list[int] | None = None
     password: str | None = Field(default=None, min_length=8, max_length=128)
 
 
@@ -54,6 +57,7 @@ class UserOut(ORMModel):
     telegram_username: str | None = None
     photo_url: str | None
     permissions: dict
+    city_access: list[int] = Field(default_factory=list)
     last_login_at: datetime | None
     created_at: datetime
 

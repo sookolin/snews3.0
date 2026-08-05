@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import useSWR from "swr";
-import { Copy, Save, Send, Trash2, Undo2, X } from "lucide-react";
+import { ArrowLeft, Ban, Copy, Save, Send, Trash2, Undo2 } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
 import type { NewsItem, Page } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
@@ -208,6 +208,20 @@ export default function NewsEditorPage() {
     try {
       await save();
       await api(`/news/${id}/publish`, { method: "POST" });
+      router.push("/news");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /** Reject the news item (leaves it in the panel, marked as rejected). */
+  const reject = async () => {
+    if (!(await confirm({ message: "Отклонить новость?", danger: true }))) return;
+    setSaving(true);
+    try {
+      await api(`/news/${id}/reject`, { method: "POST" });
       router.push("/news");
     } catch (e) {
       setError((e as Error).message);
@@ -522,10 +536,20 @@ export default function NewsEditorPage() {
                 className="btn-outline"
                 disabled={saving}
                 onClick={() => router.push("/news")}
-                title="Отменить и вернуться к списку без сохранения"
+                title="Вернуться к списку без сохранения"
               >
-                <X className="h-4 w-4" /> Отмена
+                <ArrowLeft className="h-4 w-4" /> Назад
               </button>
+              {news.status !== "rejected" && (
+                <button
+                  className="btn-danger"
+                  disabled={saving}
+                  onClick={reject}
+                  title="Отклонить новость"
+                >
+                  <Ban className="h-4 w-4" /> Отклонить
+                </button>
+              )}
 
               {isPublished ? (
                 <>

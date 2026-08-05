@@ -96,7 +96,10 @@ class NewsListItem(ORMModel):
     is_world_news: bool
     #: Non-empty when the post is currently live in a channel.
     published_message_ids: dict
+    #: Target city ids already approved (for partial multi-city approval).
+    approved_city_ids: list[int] = Field(default_factory=list)
     #: Attachments, used for the hover preview in the news table.
+
     media: list[MediaOut]
     source_published_at: datetime | None
     processed_at: datetime | None
@@ -149,6 +152,7 @@ class NewsOut(ORMModel):
     moderated_by: int | None
     rejection_reason: str | None
     published_message_ids: dict
+    approved_city_ids: list[int] = Field(default_factory=list)
     error: str | None
     media: list[MediaOut]
     created_at: datetime
