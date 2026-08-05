@@ -6,7 +6,6 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field
 
-from shared.enums import UserRole
 from shared.schemas.common import ORMModel
 
 
@@ -16,11 +15,15 @@ class UserCreate(BaseModel):
     New accounts are provisioned by an admin who binds a Telegram id (and
     optionally a username). Email/password are set later by the user, so both
     are optional here.
+
+    ``role`` is a plain string rather than the ``UserRole`` enum because
+    custom roles (created in Users → Права ролей) are not known statically;
+    the API validates it against the live role catalog instead.
     """
 
     telegram_id: int
     telegram_username: str | None = None
-    role: UserRole = UserRole.REVIEWER
+    role: str = "reviewer"
     is_active: bool = True
     language: str = "ru"
     permissions: dict = Field(default_factory=dict)
@@ -34,7 +37,7 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     email: EmailStr | None = None
     full_name: str | None = None
-    role: UserRole | None = None
+    role: str | None = None
     is_active: bool | None = None
     language: str | None = None
     telegram_id: int | None = None
@@ -48,7 +51,7 @@ class UserOut(ORMModel):
     id: int
     email: EmailStr
     full_name: str | None
-    role: UserRole
+    role: str
     is_active: bool
     is_banned: bool
     is_2fa_enabled: bool

@@ -327,7 +327,7 @@ async def approve_news(
     all_target_ids = [c.id for c in (news.target_cities or [])] or (
         [news.city_id] if news.city_id else []
     )
-    allowed = user_city_access(actor)
+    allowed = user_city_access(actor, Permission.NEWS_MODERATE)
     # Restrict this approval to the cities the actor may access; unrestricted
     # users (None) approve every remaining target city.
     already_approved = set(news.approved_city_ids or [])
@@ -758,7 +758,7 @@ async def publish_now(
     all_target_ids = [c.id for c in (news.target_cities or [])] or (
         [news.city_id] if news.city_id else []
     )
-    allowed = user_city_access(actor)
+    allowed = user_city_access(actor, Permission.NEWS_PUBLISH)
     already_approved = set(news.approved_city_ids or [])
     if allowed is None:
         approve_now = [cid for cid in all_target_ids if cid not in already_approved]

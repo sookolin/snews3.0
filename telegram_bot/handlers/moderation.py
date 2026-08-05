@@ -24,12 +24,30 @@ router = Router(name="moderation")
 log = get_logger("bot.moderation")
 
 
+async def _load_role_perm_cfg(session, user) -> None:  # type: ignore[no-untyped-def]
+    """Stash the role's permission/city-scoping config on ``user`` in-memory.
+
+    Mirrors ``backend/app/deps.get_current_user`` so
+    ``shared.security.resolve_city_scope``/``user_city_access`` see the same
+    per-city role grants for bot-side moderation actions.
+    """
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        from shared.services.settings_service import SettingsService
+
+        role_perms_cfg = await SettingsService(session).get("roles.permissions", {}) or {}
+        role_key = user.role.value if hasattr(user.role, "value") else str(user.role)
+        user._role_perm_cfg = role_perms_cfg.get(role_key, {})  # type: ignore[attr-defined]
+
+
 async def _authorized(telegram_id: int) -> tuple[bool, str]:
     """Return (allowed, language) for a moderating Telegram user."""
     async with session_scope() as session:
         user = await UserService(session).get_by_telegram_id(telegram_id)
         if user is None or not user.is_active:
             return False, "ru"
+        await _load_role_perm_cfg(session, user)
         return user_has_permission(user, Permission.NEWS_MODERATE), user.language
 
 
@@ -96,6 +114,8 @@ async def _approve(
             return
 
         user = await UserService(session).get_by_telegram_id(callback.from_user.id)
+        if user:
+            await _load_role_perm_cfg(session, user)
 
         # Resolve which of this item's target cities this moderator may
         # approve (city-restricted RBAC supports partial approval).
@@ -103,7 +123,7 @@ async def _approve(
         all_target_ids = [c.id for c in (news.target_cities or [])] or (
             [news.city_id] if news.city_id else []
         )
-        allowed = user_city_access(user) if user else None
+        allowed = user_city_access(user, Permission.NEWS_MODERATE) if user else None
         already_approved = set(news.approved_city_ids or [])
         if allowed is None:
             approve_now = [cid for cid in all_target_ids if cid not in already_approved]

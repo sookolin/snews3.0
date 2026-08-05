@@ -159,6 +159,41 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
 }
 
 
-def permissions_for_role(role: UserRole) -> set[Permission]:
-    """Return the effective permission set for a role."""
-    return ROLE_PERMISSIONS.get(role, set())
+def permissions_for_role(role: UserRole | str) -> set[Permission]:
+    """Return the effective permission set for a role.
+
+    Custom roles (not one of the built-in ``UserRole`` members) start with an
+    empty default set — every permission must be explicitly granted via
+    "Права ролей".
+    """
+    return ROLE_PERMISSIONS.get(role, set())  # type: ignore[call-overload]
+
+
+#: Permissions that can additionally be scoped to specific cities in the
+#: "Права ролей" screen (grant/deny for selected cities only, instead of
+#: all-or-nothing).
+CITY_SCOPED_PERMISSIONS: frozenset[Permission] = frozenset(
+    {
+        Permission.CITY_VIEW,
+        Permission.CITY_MANAGE,
+        Permission.SOURCE_VIEW,
+        Permission.SOURCE_MANAGE,
+        Permission.NEWS_VIEW,
+        Permission.NEWS_EDIT,
+        Permission.NEWS_MODERATE,
+        Permission.NEWS_PUBLISH,
+        Permission.NEWS_DELETE,
+    }
+)
+
+#: An "edit"-style city-scoped permission additionally requires the matching
+#: "view" permission for the same city — you cannot edit/moderate/publish
+#: what you are not allowed to see.
+CITY_SCOPE_REQUIRES_VIEW: dict[Permission, Permission] = {
+    Permission.CITY_MANAGE: Permission.CITY_VIEW,
+    Permission.SOURCE_MANAGE: Permission.SOURCE_VIEW,
+    Permission.NEWS_EDIT: Permission.NEWS_VIEW,
+    Permission.NEWS_MODERATE: Permission.NEWS_VIEW,
+    Permission.NEWS_PUBLISH: Permission.NEWS_VIEW,
+    Permission.NEWS_DELETE: Permission.NEWS_VIEW,
+}

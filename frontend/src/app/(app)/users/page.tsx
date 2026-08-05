@@ -21,12 +21,29 @@ const DEFAULT_ROLE_COLORS: Record<string, string> = {
   reviewer:    "#94a3b8",
 };
 
-interface PermissionInfo { value: string; label: string; group: string }
+interface PermissionInfo { value: string; label: string; group: string; city_scoped?: boolean }
 interface PermissionCatalog {
   permissions: PermissionInfo[];
   roles: Record<string, string[]>;
   all_roles: string[];
 }
+
+type CityScopeMode = "role" | "grant" | "grant_selected" | "deny" | "deny_selected";
+/** Mirrors shared.enums.CITY_SCOPE_REQUIRES_VIEW: edit-style perms need the matching view perm. */
+const CITY_SCOPE_REQUIRES_VIEW: Record<string, string> = {
+  "city:manage": "city:view",
+  "source:manage": "source:view",
+  "news:edit": "news:view",
+  "news:moderate": "news:view",
+  "news:publish": "news:view",
+  "news:delete": "news:view",
+};
+interface RolePermEntry {
+  grant: string[];
+  deny: string[];
+  city_scoped: Record<string, { mode: CityScopeMode; cities: number[] }>;
+}
+const BUILT_IN_ROLE_KEYS = ["super_admin", "admin", "moderator", "editor", "reviewer"];
 
 interface UserForm {
   id?: number;
@@ -58,13 +75,13 @@ const EMPTY: UserForm = {
 export default function UsersPage() {
   const { data, mutate } = useSWR<Page<User>>("/users?size=100", fetcher);
   const { data: cities } = useSWR<Page<City>>("/cities?size=200", fetcher);
-  const { data: catalog } = useSWR<PermissionCatalog>("/users/permissions", fetcher);
+  const { data: catalog, mutate: mutateCatalog } = useSWR<PermissionCatalog>("/users/permissions", fetcher);
   const { data: roleLabels, mutate: mutateLabels } =
     useSWR<Record<string, string>>("/users/role-labels", fetcher);
   const { data: roleColorsData, mutate: mutateColors } =
     useSWR<Record<string, string>>("/users/role-colors", fetcher);
   const { data: rolePermsData, mutate: mutateRolePerms } =
-    useSWR<Record<string, { grant: string[]; deny: string[] }>>("/users/role-permissions", fetcher);
+    useSWR<Record<string, RolePermEntry>>("/users/role-permissions", fetcher);
   const { data: me } = useSWR<User>("/auth/me", fetcher, { revalidateOnFocus: false });
   const isSuperAdmin = me?.role === "super_admin";
   const [form, setForm] = useState<UserForm | null>(null);
@@ -73,9 +90,9 @@ export default function UsersPage() {
   const [renaming, setRenaming] = useState<Record<string, string> | null>(null);
   const [renamingColors, setRenamingColors] = useState<Record<string, string>>({});
   // Role permissions management dialog
-  const [rolePermsModal, setRolePermsModal] = useState<
-    Record<string, { grant: string[]; deny: string[] }> | null
-  >(null);
+  const [rolePermsModal, setRolePermsModal] = useState<Record<string, RolePermEntry> | null>(null);
+  // Add-role dialog
+  const [newRole, setNewRole] = useState<{ key: string; label: string; color: string } | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const toast = useToast();
 
@@ -114,12 +131,13 @@ export default function UsersPage() {
 
   const openRolePermsModal = () => {
     // Clone existing or start empty
-    const base: Record<string, { grant: string[]; deny: string[] }> = {};
+    const base: Record<string, RolePermEntry> = {};
     for (const r of catalog?.all_roles ?? []) {
       if (r === "super_admin") continue;
       base[r] = {
         grant: [...(rolePermsData?.[r]?.grant ?? [])],
         deny: [...(rolePermsData?.[r]?.deny ?? [])],
+        city_scoped: { ...(rolePermsData?.[r]?.city_scoped ?? {}) },
       };
     }
     setRolePermsModal(base);
@@ -131,13 +149,13 @@ export default function UsersPage() {
     next: "grant" | "deny" | "role"
   ) => {
     if (!rolePermsModal) return;
-    const cur = rolePermsModal[role] ?? { grant: [], deny: [] };
+    const cur = rolePermsModal[role] ?? { grant: [], deny: [], city_scoped: {} };
     const g = new Set(cur.grant);
     const d = new Set(cur.deny);
     g.delete(perm); d.delete(perm);
     if (next === "grant") g.add(perm);
     if (next === "deny") d.add(perm);
-    setRolePermsModal({ ...rolePermsModal, [role]: { grant: [...g], deny: [...d] } });
+    setRolePermsModal({ ...rolePermsModal, [role]: { ...cur, grant: [...g], deny: [...d] } });
   };
 
   const rolePermStateOf = (role: string, perm: string): "grant" | "deny" | "role" => {
@@ -146,6 +164,63 @@ export default function UsersPage() {
     if (cur?.deny?.includes(perm)) return "deny";
     if (cur?.grant?.includes(perm)) return "grant";
     return "role";
+  };
+
+  /** City-scope mode for a permission in the role permissions modal. */
+  const cityScopeOf = (role: string, perm: string): { mode: CityScopeMode; cities: number[] } => {
+    const cur = rolePermsModal?.[role]?.city_scoped?.[perm];
+    return cur ?? { mode: "role", cities: [] };
+  };
+
+  const setCityScopeMode = (role: string, perm: string, mode: CityScopeMode) => {
+    if (!rolePermsModal) return;
+    const cur = rolePermsModal[role] ?? { grant: [], deny: [], city_scoped: {} };
+    const prevCities = cur.city_scoped?.[perm]?.cities ?? [];
+    const nextScoped = { ...cur.city_scoped, [perm]: { mode, cities: mode.endsWith("selected") ? prevCities : [] } };
+    if (mode === "role") delete nextScoped[perm];
+    setRolePermsModal({ ...rolePermsModal, [role]: { ...cur, city_scoped: nextScoped } });
+  };
+
+  const toggleCityScopeCity = (role: string, perm: string, cityId: number) => {
+    if (!rolePermsModal) return;
+    const cur = rolePermsModal[role] ?? { grant: [], deny: [], city_scoped: {} };
+    const entry = cur.city_scoped?.[perm] ?? { mode: "grant_selected" as CityScopeMode, cities: [] };
+    const cities = entry.cities.includes(cityId)
+      ? entry.cities.filter((c) => c !== cityId)
+      : [...entry.cities, cityId];
+    setRolePermsModal({
+      ...rolePermsModal,
+      [role]: { ...cur, city_scoped: { ...cur.city_scoped, [perm]: { ...entry, cities } } },
+    });
+  };
+
+  const addRole = async () => {
+    if (!newRole) return;
+    try {
+      await api("/users/roles", { method: "POST", body: JSON.stringify(newRole) });
+      await Promise.all([mutateCatalog(), mutateLabels(), mutateColors(), mutateRolePerms()]);
+      setNewRole(null);
+      toast.success("Роль создана");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  const deleteRole = async (roleKey: string) => {
+    if (!(await confirm({ message: `Удалить роль «${ROLE_LABELS[roleKey] ?? roleKey}»? Пользователи с этой ролью не будут переназначены автоматически.`, danger: true }))) return;
+    try {
+      await api(`/users/roles/${roleKey}`, { method: "DELETE" });
+      await Promise.all([mutateCatalog(), mutateLabels(), mutateColors(), mutateRolePerms()]);
+      setRolePermsModal((prev) => {
+        if (!prev) return prev;
+        const next = { ...prev };
+        delete next[roleKey];
+        return next;
+      });
+      toast.success("Роль удалена");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   };
 
   const applyPreview = (role: string | null) => {
@@ -268,6 +343,9 @@ export default function UsersPage() {
           <div className="flex gap-2">
             <button className="btn-outline" onClick={openRolePermsModal}>
               <Settings2 className="h-4 w-4" /> Права ролей
+            </button>
+            <button className="btn-outline" onClick={() => setNewRole({ key: "", label: "", color: "#0ea5e9" })}>
+              <Tags className="h-4 w-4" /> Добавить роль
             </button>
             <button className="btn-outline" onClick={() => { setRenaming({ ...ROLE_LABELS }); setRenamingColors({ ...ROLE_COLORS }); }}>
               <Tags className="h-4 w-4" /> Названия ролей
@@ -610,6 +688,45 @@ export default function UsersPage() {
         )}
       </Modal>
 
+      {/* Add custom role modal */}
+      <Modal open={!!newRole} onClose={() => setNewRole(null)} title="Новая роль">
+        {newRole && (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Новая роль изначально не даёт никаких прав — настройте их после создания в «Права ролей».
+            </p>
+            <Field label="Ключ роли" hint="Латиница в нижнем регистре, цифры и _, 2-32 символа">
+              <input
+                className="input"
+                value={newRole.key}
+                onChange={(e) => setNewRole({ ...newRole, key: e.target.value.trim().toLowerCase() })}
+                placeholder="curator"
+              />
+            </Field>
+            <Field label="Название">
+              <input
+                className="input"
+                value={newRole.label}
+                onChange={(e) => setNewRole({ ...newRole, label: e.target.value })}
+                placeholder="Куратор"
+              />
+            </Field>
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium">Цвет</span>
+              <input
+                type="color"
+                className="h-9 w-11 cursor-pointer rounded border border-border bg-transparent p-0.5"
+                value={newRole.color}
+                onChange={(e) => setNewRole({ ...newRole, color: e.target.value })}
+              />
+            </div>
+            <div className="flex justify-end border-t border-border pt-4">
+              <button className="btn-primary" onClick={addRole} disabled={!newRole.key}>Создать</button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       {/* Role permissions modal */}
       <Modal
         open={!!rolePermsModal}
@@ -627,11 +744,23 @@ export default function UsersPage() {
             {/* Tabs by role */}
             {Object.keys(rolePermsModal).map((role) => (
               <div key={role} className="rounded-lg border border-border">
-                <div className="border-b border-border bg-muted/40 px-4 py-2.5">
-                  <span className="font-semibold" style={{ color: ROLE_COLORS[role] }}>
-                    {ROLE_LABELS[role] ?? role}
-                  </span>
-                  <span className="ml-2 text-xs text-muted-foreground">({role})</span>
+                <div className="flex items-center justify-between border-b border-border bg-muted/40 px-4 py-2.5">
+                  <div>
+                    <span className="font-semibold" style={{ color: ROLE_COLORS[role] }}>
+                      {ROLE_LABELS[role] ?? role}
+                    </span>
+                    <span className="ml-2 text-xs text-muted-foreground">({role})</span>
+                  </div>
+                  {!BUILT_IN_ROLE_KEYS.includes(role) && (
+                    <button
+                      type="button"
+                      className="btn-icon-danger"
+                      title="Удалить роль"
+                      onClick={() => deleteRole(role)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
                 <div className="max-h-64 overflow-y-auto p-4">
                   <div className="space-y-4">
@@ -649,30 +778,97 @@ export default function UsersPage() {
                           {perms.map((p) => {
                             const st = rolePermStateOf(role, p.value);
                             const defaultHas = (catalog.roles[role] ?? []).includes(p.value);
+                            const scope = cityScopeOf(role, p.value);
+                            const requiredView = CITY_SCOPE_REQUIRES_VIEW[p.value];
+                            const viewScope = requiredView ? cityScopeOf(role, requiredView) : null;
+                            const viewDeniesAll = requiredView ? viewScope?.mode === "deny" : false;
                             return (
                               <div
                                 key={p.value}
-                                className="grid grid-cols-1 items-center gap-2 rounded border border-border/60 p-2 sm:grid-cols-[1fr_150px]"
+                                className="rounded border border-border/60 p-2"
                               >
-                                <div className="min-w-0">
-                                  <div className="text-sm leading-tight">{p.label}</div>
-                                  <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
-                                    {p.value}
-                                    {defaultHas && (
-                                      <span className="ml-1 rounded bg-emerald-50 px-1 py-px text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
-                                        по умолч.
-                                      </span>
+                                <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[1fr_150px]">
+                                  <div className="min-w-0">
+                                    <div className="text-sm leading-tight">{p.label}</div>
+                                    <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                                      {p.value}
+                                      {defaultHas && (
+                                        <span className="ml-1 rounded bg-emerald-50 px-1 py-px text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
+                                          по умолч.
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <Select
+                                    value={st}
+                                    onChange={(v) => setRolePermState(role, p.value, v as "grant" | "deny" | "role")}
+                                  >
+                                    <option value="role">По умолчанию</option>
+                                    <option value="grant">Разрешить</option>
+                                    <option value="deny">Запретить</option>
+                                  </Select>
+                                </div>
+                                {p.city_scoped && st !== "deny" && (
+                                  <div className="mt-2 border-t border-dashed border-border/60 pt-2">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs text-muted-foreground">По городам:</span>
+                                      <div className="w-48">
+                                        <Select
+                                          value={scope.mode}
+                                          onChange={(v) => setCityScopeMode(role, p.value, v as CityScopeMode)}
+                                          disabled={viewDeniesAll}
+                                        >
+                                          <option value="role">По умолчанию</option>
+                                          <option value="grant">Разрешить</option>
+                                          <option value="grant_selected">Разрешить (выбранные)</option>
+                                          <option value="deny">Запретить</option>
+                                          <option value="deny_selected">Запретить (выбранные)</option>
+                                        </Select>
+                                      </div>
+                                      {viewDeniesAll && (
+                                        <span className="text-[11px] text-rose-500">
+                                          Нет прав на просмотр — редактирование недоступно
+                                        </span>
+                                      )}
+                                    </div>
+                                    {(scope.mode === "grant_selected" || scope.mode === "deny_selected") && !viewDeniesAll && (
+                                      <div className="mt-2 flex max-h-32 flex-wrap gap-1 overflow-y-auto rounded-md border border-border p-1.5">
+                                        {(cities?.items ?? [])
+                                          .filter((c) => c.kind === "city" || !c.kind)
+                                          .filter((c) => {
+                                            // For edit-style perms, city choices are limited to cities
+                                            // allowed by the matching view permission's scope.
+                                            if (!requiredView || !viewScope) return true;
+                                            if (viewScope.mode === "role" || viewScope.mode === "grant") return true;
+                                            if (viewScope.mode === "grant_selected") return viewScope.cities.includes(c.id);
+                                            if (viewScope.mode === "deny_selected") return !viewScope.cities.includes(c.id);
+                                            return true;
+                                          })
+                                          .sort((a, b) => a.name.localeCompare(b.name, "ru"))
+                                          .map((c) => {
+                                            const active = scope.cities.includes(c.id);
+                                            return (
+                                              <button
+                                                key={c.id}
+                                                type="button"
+                                                onClick={() => toggleCityScopeCity(role, p.value, c.id)}
+                                                className={`rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                                                  active
+                                                    ? "border-primary bg-primary text-primary-foreground"
+                                                    : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                                                }`}
+                                              >
+                                                {c.name}
+                                              </button>
+                                            );
+                                          })}
+                                        {(cities?.items ?? []).length === 0 && (
+                                          <span className="text-xs text-muted-foreground">Нет городов</span>
+                                        )}
+                                      </div>
                                     )}
                                   </div>
-                                </div>
-                                <Select
-                                  value={st}
-                                  onChange={(v) => setRolePermState(role, p.value, v as "grant" | "deny" | "role")}
-                                >
-                                  <option value="role">По умолчанию</option>
-                                  <option value="grant">Разрешить</option>
-                                  <option value="deny">Запретить</option>
-                                </Select>
+                                )}
                               </div>
                             );
                           })}

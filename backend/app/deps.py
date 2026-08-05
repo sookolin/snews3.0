@@ -58,6 +58,11 @@ async def get_current_user(
         role_perms_cfg = await SettingsService(session).get("roles.permissions", {}) or {}
         role_key = user.role.value if hasattr(user.role, "value") else str(user.role)
         role_cfg = role_perms_cfg.get(role_key, {})
+        # Stash the raw role config (including any per-city scoping) so
+        # ``shared.security.resolve_city_scope``/``user_city_access`` can read
+        # it without a second DB round-trip. Not persisted — session is not
+        # committed, so the DB is untouched.
+        user._role_perm_cfg = role_cfg  # type: ignore[attr-defined]
         if role_cfg:
             existing = dict(user.permissions or {})
             r_grant = set(role_cfg.get("grant") or [])

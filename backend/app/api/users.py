@@ -38,18 +38,33 @@ PERMISSION_LABELS: dict[str, tuple[str, str]] = {
 }
 
 
+#: Permissions whose access can be scoped to specific cities in Права ролей.
+CITY_SCOPABLE_PERMISSION_VALUES: set[str] = {
+    "city:view", "city:manage",
+    "source:view", "source:manage",
+    "news:view", "news:edit", "news:moderate", "news:publish", "news:delete",
+}
+
+
 @router.get("/permissions", response_model=dict)
 async def list_permissions(
+    session: DBSession,
     _: User = Depends(require_permission(Permission.USER_VIEW)),
 ) -> dict:
-    """Catalog of all permissions plus the defaults granted by each role."""
+    """Catalog of all permissions plus the defaults granted by each role.
+
+    ``all_roles`` includes both the built-in roles and any custom roles
+    created via "Права ролей" (persisted in the ``roles.custom`` setting).
+    """
     from shared.enums import ROLE_PERMISSIONS, UserRole
+    from shared.services.settings_service import SettingsService
 
     catalog = [
         {
             "value": p.value,
             "label": PERMISSION_LABELS.get(p.value, (p.value, "Прочее"))[0],
             "group": PERMISSION_LABELS.get(p.value, (p.value, "Прочее"))[1],
+            "city_scoped": p.value in CITY_SCOPABLE_PERMISSION_VALUES,
         }
         for p in Permission
     ]
@@ -57,7 +72,133 @@ async def list_permissions(
         role.value: sorted(perm.value for perm in perms)
         for role, perms in ROLE_PERMISSIONS.items()
     }
-    return {"permissions": catalog, "roles": roles, "all_roles": [r.value for r in UserRole]}
+    custom_roles = await SettingsService(session).get("roles.custom", []) or []
+    all_roles = [r.value for r in UserRole] + [
+        r for r in custom_roles if r not in {rr.value for rr in UserRole}
+    ]
+    for role in custom_roles:
+        roles.setdefault(role, [])
+    return {"permissions": catalog, "roles": roles, "all_roles": all_roles}
+
+
+@router.post("/roles", response_model=dict, status_code=201)
+async def create_role(
+    payload: dict,
+    session: DBSession,
+    meta: ClientMeta,
+    actor: User = Depends(require_permission(Permission.USER_MANAGE)),
+) -> dict:
+    """Create a new custom role with no permissions by default.
+
+    Payload: ``{"key": "curator", "label": "Куратор", "color": "#..."}``.
+    ``key`` must be unique and lowercase-slug-like; permissions are then
+    configured in Права ролей like any other role.
+    """
+    import re
+
+    from shared.enums import UserRole
+    from shared.services.settings_service import SettingsService
+
+    key = str(payload.get("key") or "").strip().lower()
+    label = str(payload.get("label") or key).strip()
+    color = str(payload.get("color") or "").strip()
+    if not key or not re.fullmatch(r"[a-z][a-z0-9_]{1,31}", key):
+        from shared.exceptions import ValidationError
+
+        raise ValidationError(
+            "Ключ роли: латиница в нижнем регистре, цифры и _, 2-32 символа"
+        )
+    if key in {r.value for r in UserRole}:
+        from shared.exceptions import ConflictError
+
+        raise ConflictError("Такой ключ роли зарезервирован системой")
+
+    settings_service = SettingsService(session)
+    custom_roles: list[str] = list(await settings_service.get("roles.custom", []) or [])
+    if key in custom_roles:
+        from shared.exceptions import ConflictError
+
+        raise ConflictError("Роль с таким ключом уже существует")
+    custom_roles.append(key)
+    await settings_service.set("roles.custom", custom_roles, category="ui")
+
+    if label:
+        labels = dict(await settings_service.get("roles.labels", {}) or {})
+        labels[key] = label
+        await settings_service.set("roles.labels", labels, category="ui")
+    if color:
+        colors = dict(await settings_service.get("roles.colors", {}) or {})
+        colors[key] = color
+        await settings_service.set("roles.colors", colors, category="ui")
+
+    # Start with an explicit empty permission set so the role grants nothing
+    # until configured in Права ролей.
+    role_perms = dict(await settings_service.get("roles.permissions", {}) or {})
+    role_perms.setdefault(key, {"grant": [], "deny": [], "city_scoped": {}})
+    await settings_service.set("roles.permissions", role_perms, category="ui")
+
+    await AuditService(session).log(
+        "role.create",
+        user_id=actor.id,
+        actor=actor.email,
+        entity_type="role",
+        entity_id=key,
+        changes={"label": label, "color": color},
+        **meta,
+    )
+    return {"key": key, "label": label or key, "color": color}
+
+
+@router.delete("/roles/{role_key}", response_model=Message)
+async def delete_role(
+    role_key: str,
+    session: DBSession,
+    meta: ClientMeta,
+    actor: User = Depends(require_permission(Permission.USER_MANAGE)),
+) -> Message:
+    """Delete a custom role. Built-in roles cannot be deleted.
+
+    Users currently on this role are NOT auto-migrated; they keep the role
+    string (which then grants nothing) until an admin re-assigns them. This
+    avoids silently changing who-can-do-what for existing accounts.
+    """
+    from shared.enums import UserRole
+    from shared.exceptions import ValidationError
+    from shared.services.settings_service import SettingsService
+
+    if role_key in {r.value for r in UserRole}:
+        raise ValidationError("Встроенные роли удалить нельзя")
+
+    settings_service = SettingsService(session)
+    custom_roles: list[str] = list(await settings_service.get("roles.custom", []) or [])
+    if role_key not in custom_roles:
+        from shared.exceptions import NotFoundError
+
+        raise NotFoundError("Роль не найдена")
+    custom_roles.remove(role_key)
+    await settings_service.set("roles.custom", custom_roles, category="ui")
+
+    role_perms = dict(await settings_service.get("roles.permissions", {}) or {})
+    role_perms.pop(role_key, None)
+    await settings_service.set("roles.permissions", role_perms, category="ui")
+
+    labels = dict(await settings_service.get("roles.labels", {}) or {})
+    labels.pop(role_key, None)
+    await settings_service.set("roles.labels", labels, category="ui")
+
+    colors = dict(await settings_service.get("roles.colors", {}) or {})
+    colors.pop(role_key, None)
+    await settings_service.set("roles.colors", colors, category="ui")
+
+    await AuditService(session).log(
+        "role.delete",
+        user_id=actor.id,
+        actor=actor.email,
+        entity_type="role",
+        entity_id=role_key,
+        **meta,
+    )
+    return Message(detail="Роль удалена")
 
 
 #: Built-in role names, used when no custom label was set.
@@ -148,24 +289,65 @@ async def set_role_permissions(
     session: DBSession,
     _: User = Depends(require_permission(Permission.USER_MANAGE)),
 ) -> dict:
-    """Persist per-role permission overrides.
+    """Persist per-role permission overrides, including per-city scoping.
 
-    Payload: {"admin": {"grant": ["news:delete"], "deny": []}, ...}
+    Payload per role::
+
+        {
+          "admin": {
+            "grant": ["news:delete"],
+            "deny": [],
+            "city_scoped": {
+              "news:moderate": {"mode": "grant_selected", "cities": [1, 2]},
+              "source:manage": {"mode": "deny"},
+            },
+          },
+          ...
+        }
+
+    ``city_scoped`` modes, for permissions in ``CITY_SCOPABLE_PERMISSION_VALUES``:
+      - ``role`` — use the role's built-in default (unrestricted if granted).
+      - ``grant`` — allow for every city.
+      - ``grant_selected`` — allow only for ``cities``.
+      - ``deny`` — deny for every city (permission unusable).
+      - ``deny_selected`` — allow everywhere EXCEPT ``cities``.
+
+    An "edit"-style permission (moderate/publish/delete/manage) is further
+    intersected with the matching "view" permission's city scope at
+    resolution time — you cannot act on a city you cannot see (enforced in
+    ``shared.security.user_city_access``, not stored here).
+
     Super admin role is immutable and always gets all permissions.
     """
     from shared.services.settings_service import SettingsService
     from shared.enums import UserRole, Permission as P
 
-    allowed_roles = {r.value for r in UserRole} - {"super_admin"}
+    settings_service = SettingsService(session)
+    custom_roles: list[str] = list(await settings_service.get("roles.custom", []) or [])
+    allowed_roles = ({r.value for r in UserRole} | set(custom_roles)) - {"super_admin"}
     allowed_perms = {p.value for p in P}
+    allowed_modes = {"role", "grant", "grant_selected", "deny", "deny_selected"}
+
     cleaned: dict = {}
     for role, overrides in (payload or {}).items():
         if role not in allowed_roles:
             continue
         grant = [p for p in (overrides.get("grant") or []) if p in allowed_perms]
         deny = [p for p in (overrides.get("deny") or []) if p in allowed_perms]
-        cleaned[role] = {"grant": grant, "deny": deny}
-    await SettingsService(session).set("roles.permissions", cleaned, category="ui")
+
+        city_scoped_in = overrides.get("city_scoped") or {}
+        city_scoped: dict = {}
+        for perm, scope in city_scoped_in.items():
+            if perm not in CITY_SCOPABLE_PERMISSION_VALUES or not isinstance(scope, dict):
+                continue
+            mode = scope.get("mode")
+            if mode not in allowed_modes:
+                continue
+            cities = [int(c) for c in (scope.get("cities") or []) if isinstance(c, (int, str))]
+            city_scoped[perm] = {"mode": mode, "cities": cities}
+
+        cleaned[role] = {"grant": grant, "deny": deny, "city_scoped": city_scoped}
+    await settings_service.set("roles.permissions", cleaned, category="ui")
     return cleaned
 
 
