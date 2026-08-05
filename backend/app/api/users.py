@@ -73,11 +73,14 @@ async def list_permissions(
         for role, perms in ROLE_PERMISSIONS.items()
     }
     custom_roles = await SettingsService(session).get("roles.custom", []) or []
-    all_roles = [r.value for r in UserRole] + [
+    deleted_builtin = set(await SettingsService(session).get("roles.deleted_builtin", []) or [])
+    all_roles = [r.value for r in UserRole if r.value not in deleted_builtin] + [
         r for r in custom_roles if r not in {rr.value for rr in UserRole}
     ]
     for role in custom_roles:
         roles.setdefault(role, [])
+    for role in deleted_builtin:
+        roles.pop(role, None)
     return {"permissions": catalog, "roles": roles, "all_roles": all_roles}
 
 
@@ -156,30 +159,52 @@ async def delete_role(
     meta: ClientMeta,
     actor: User = Depends(require_permission(Permission.USER_MANAGE)),
 ) -> Message:
-    """Delete a custom role. Built-in roles cannot be deleted.
+    """Delete a role — custom or built-in (except ``super_admin``).
 
     Users currently on this role are NOT auto-migrated; they keep the role
-    string (which then grants nothing) until an admin re-assigns them. This
-    avoids silently changing who-can-do-what for existing accounts.
+    string until an admin re-assigns them. To avoid silently leaving those
+    accounts with the role's original permission set, the role's effective
+    permissions are also zeroed out (denied) so it grants nothing going
+    forward, exactly like a freshly-created custom role. Built-in roles are
+    additionally hidden from the "all_roles" catalog (``roles.deleted_builtin``)
+    so they no longer appear in role pickers; ``super_admin`` can never be
+    removed because at least one fully-privileged role must always exist.
     """
+    from shared.enums import Permission as P
     from shared.enums import UserRole
     from shared.exceptions import ValidationError
     from shared.services.settings_service import SettingsService
 
-    if role_key in {r.value for r in UserRole}:
-        raise ValidationError("Встроенные роли удалить нельзя")
+    if role_key == UserRole.SUPER_ADMIN.value:
+        raise ValidationError("Роль «Супер-админ» удалить нельзя")
 
     settings_service = SettingsService(session)
-    custom_roles: list[str] = list(await settings_service.get("roles.custom", []) or [])
-    if role_key not in custom_roles:
-        from shared.exceptions import NotFoundError
+    is_builtin = role_key in {r.value for r in UserRole}
 
-        raise NotFoundError("Роль не найдена")
-    custom_roles.remove(role_key)
-    await settings_service.set("roles.custom", custom_roles, category="ui")
+    if is_builtin:
+        deleted_builtin: list[str] = list(
+            await settings_service.get("roles.deleted_builtin", []) or []
+        )
+        if role_key not in deleted_builtin:
+            deleted_builtin.append(role_key)
+        await settings_service.set("roles.deleted_builtin", deleted_builtin, category="ui")
+    else:
+        custom_roles: list[str] = list(await settings_service.get("roles.custom", []) or [])
+        if role_key not in custom_roles:
+            from shared.exceptions import NotFoundError
 
+            raise NotFoundError("Роль не найдена")
+        custom_roles.remove(role_key)
+        await settings_service.set("roles.custom", custom_roles, category="ui")
+
+    # Zero out effective permissions so existing users on this role
+    # immediately lose all access from it, instead of silently keeping the
+    # built-in default permission set.
     role_perms = dict(await settings_service.get("roles.permissions", {}) or {})
-    role_perms.pop(role_key, None)
+    if is_builtin:
+        role_perms[role_key] = {"grant": [], "deny": [p.value for p in P], "city_scoped": {}}
+    else:
+        role_perms.pop(role_key, None)
     await settings_service.set("roles.permissions", role_perms, category="ui")
 
     labels = dict(await settings_service.get("roles.labels", {}) or {})

@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from shared.exceptions import ConflictError, NotFoundError
+from shared.exceptions import ConflictError, NotFoundError, ValidationError
 from shared.models.user import User
 from shared.schemas.user import UserCreate, UserUpdate
 from shared.security import hash_password
@@ -16,6 +16,25 @@ class UserService:
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+
+    async def _validate_role(self, role: str | None) -> None:
+        """Ensure ``role`` is a known built-in or custom role.
+
+        The ``role`` column is a plain string (not a strict SQLAlchemy enum)
+        so custom roles work, but that means bad input must be rejected here
+        instead of surfacing as a raw DB/enum error later.
+        """
+        if role is None:
+            return
+        from shared.enums import UserRole
+        from shared.services.settings_service import SettingsService
+
+        built_in = {r.value for r in UserRole}
+        if role in built_in:
+            return
+        custom_roles = await SettingsService(self.session).get("roles.custom", []) or []
+        if role not in custom_roles:
+            raise ValidationError(f"Неизвестная роль: {role}", code="unknown_role")
 
     async def get(self, user_id: int) -> User | None:
         return await self.session.get(User, user_id)
@@ -48,6 +67,7 @@ class UserService:
             raise ConflictError("Telegram ID обязателен", code="telegram_required")
         if await self.get_by_telegram_id(payload.telegram_id):
             raise ConflictError("Этот Telegram уже привязан", code="telegram_exists")
+        await self._validate_role(payload.role)
 
         # Email/password are optional at creation (the user sets them later).
         # When absent we synthesise a stable placeholder email and a random
@@ -76,6 +96,8 @@ class UserService:
         user = await self.get_or_404(user_id)
         data = payload.model_dump(exclude_unset=True)
         password = data.pop("password", None)
+        if "role" in data:
+            await self._validate_role(data["role"])
         for key, value in data.items():
             setattr(user, key, value)
         if password:

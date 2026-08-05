@@ -168,7 +168,8 @@ async def update_profile(
 
     # email and password changes are sensitive — only the user themselves or super admins
     for sensitive in ("email", "password"):
-        if sensitive in data and user.id != actor.id and actor.role.value != "super_admin":
+        actor_role = actor.role.value if hasattr(actor.role, "value") else actor.role
+        if sensitive in data and user.id != actor.id and actor_role != "super_admin":
             from fastapi import HTTPException
             raise HTTPException(403, "Только супер-администратор может менять эти поля у других")
 

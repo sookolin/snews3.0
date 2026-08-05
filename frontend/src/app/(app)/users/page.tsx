@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import Link from "next/link";
-import { Eye, Pencil, Settings2, Tags, Trash2, UserCircle, ShieldOff, Ban } from "lucide-react";
+import { Eye, Pencil, Settings2, Tags, Trash2, UserCircle, ShieldOff, Ban, ChevronDown } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
 import type { City, Page, User } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
@@ -91,6 +91,8 @@ export default function UsersPage() {
   const [renamingColors, setRenamingColors] = useState<Record<string, string>>({});
   // Role permissions management dialog
   const [rolePermsModal, setRolePermsModal] = useState<Record<string, RolePermEntry> | null>(null);
+  // Which role's card is expanded (spoiler) in the "Права ролей" modal.
+  const [expandedRole, setExpandedRole] = useState<string | null>(null);
   // Add-role dialog
   const [newRole, setNewRole] = useState<{ key: string; label: string; color: string } | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
@@ -141,6 +143,7 @@ export default function UsersPage() {
       };
     }
     setRolePermsModal(base);
+    setExpandedRole(null);
   };
 
   const setRolePermState = (
@@ -207,7 +210,11 @@ export default function UsersPage() {
   };
 
   const deleteRole = async (roleKey: string) => {
-    if (!(await confirm({ message: `Удалить роль «${ROLE_LABELS[roleKey] ?? roleKey}»? Пользователи с этой ролью не будут переназначены автоматически.`, danger: true }))) return;
+    const isBuiltIn = BUILT_IN_ROLE_KEYS.includes(roleKey);
+    const warning = isBuiltIn
+      ? `Удалить встроенную роль «${ROLE_LABELS[roleKey] ?? roleKey}»? Она перестанет предлагаться при выборе роли, а у пользователей с этой ролью будут отобраны все права, пока им не назначат другую роль.`
+      : `Удалить роль «${ROLE_LABELS[roleKey] ?? roleKey}»? Пользователи с этой ролью не будут переназначены автоматически.`;
+    if (!(await confirm({ message: warning, danger: true }))) return;
     try {
       await api(`/users/roles/${roleKey}`, { method: "DELETE" });
       await Promise.all([mutateCatalog(), mutateLabels(), mutateColors(), mutateRolePerms()]);
@@ -217,6 +224,7 @@ export default function UsersPage() {
         delete next[roleKey];
         return next;
       });
+      setExpandedRole((cur) => (cur === roleKey ? null : cur));
       toast.success("Роль удалена");
     } catch (e) {
       toast.error((e as Error).message);
@@ -741,27 +749,36 @@ export default function UsersPage() {
               <b>Разрешить</b> — добавить право сверх стандарта. <b>Запретить</b> — убрать право из роли.
               Индивидуальные переопределения для конкретного пользователя всегда имеют приоритет.
             </p>
-            {/* Tabs by role */}
-            {Object.keys(rolePermsModal).map((role) => (
+            {/* Roles as collapsible spoilers */}
+            {Object.keys(rolePermsModal).map((role) => {
+              const isOpen = expandedRole === role;
+              return (
               <div key={role} className="rounded-lg border border-border">
-                <div className="flex items-center justify-between border-b border-border bg-muted/40 px-4 py-2.5">
-                  <div>
+                <div
+                  className="flex cursor-pointer items-center justify-between border-b border-border bg-muted/40 px-4 py-2.5"
+                  onClick={() => setExpandedRole(isOpen ? null : role)}
+                >
+                  <div className="flex items-center gap-2">
+                    <ChevronDown
+                      className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`}
+                    />
                     <span className="font-semibold" style={{ color: ROLE_COLORS[role] }}>
                       {ROLE_LABELS[role] ?? role}
                     </span>
-                    <span className="ml-2 text-xs text-muted-foreground">({role})</span>
+                    <span className="text-xs text-muted-foreground">({role})</span>
                   </div>
-                  {!BUILT_IN_ROLE_KEYS.includes(role) && (
+                  {role !== "super_admin" && (
                     <button
                       type="button"
                       className="btn-icon-danger"
                       title="Удалить роль"
-                      onClick={() => deleteRole(role)}
+                      onClick={(e) => { e.stopPropagation(); deleteRole(role); }}
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
                   )}
                 </div>
+                {isOpen && (
                 <div className="max-h-64 overflow-y-auto p-4">
                   <div className="space-y-4">
                     {Object.entries(
@@ -877,8 +894,10 @@ export default function UsersPage() {
                     ))}
                   </div>
                 </div>
+                )}
               </div>
-            ))}
+              );
+            })}
             <div className="flex justify-end border-t border-border pt-4">
               <button className="btn-primary" onClick={saveRolePerms}>Сохранить</button>
             </div>

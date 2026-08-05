@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, String
+from sqlalchemy import BigInteger, Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from shared.database import Base, TimestampMixin
+
+# Note: shared.enums.UserRole import intentionally removed from column typing
+# below — see the `role` column docstring for why it's a plain string.
 from shared.db_types import JSONB
-from shared.enums import UserRole
 
 
 class User(Base, TimestampMixin):
@@ -21,9 +23,15 @@ class User(Base, TimestampMixin):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     full_name: Mapped[str | None] = mapped_column(String(255))
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[UserRole] = mapped_column(
-        Enum(UserRole, native_enum=False, length=32),
-        default=UserRole.REVIEWER,
+    # Plain string, NOT a SQLAlchemy Enum(UserRole, ...): custom roles created
+    # via Users → "Права ролей" / "Добавить роль" are arbitrary strings not
+    # known to the ``UserRole`` Python enum, so a strict enum column would
+    # reject them with a raw ``LookupError`` at flush time (uncaught -> 500).
+    # Validity is enforced at the service layer (``UserService``) against the
+    # live role catalog (built-in ``UserRole`` values + ``roles.custom``).
+    role: Mapped[str] = mapped_column(
+        String(32),
+        default="reviewer",
         nullable=False,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

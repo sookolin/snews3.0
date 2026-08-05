@@ -65,7 +65,7 @@ async def login(payload: LoginRequest, session: DBSession, request: Request) -> 
 
     await _after_login(session, user, request)
     return TokenPair(
-        access_token=create_access_token(user.id, {"role": user.role.value}),
+        access_token=create_access_token(user.id, {"role": (user.role.value if hasattr(user.role, 'value') else user.role)}),
         refresh_token=create_refresh_token(user.id),
     )
 
@@ -80,7 +80,7 @@ async def refresh(payload: RefreshRequest, session: DBSession) -> TokenPair:
     if user is None or not user.is_active:
         raise AuthenticationError("User not found or inactive", code="user_inactive")
     return TokenPair(
-        access_token=create_access_token(user.id, {"role": user.role.value}),
+        access_token=create_access_token(user.id, {"role": (user.role.value if hasattr(user.role, 'value') else user.role)}),
         refresh_token=create_refresh_token(user.id),
     )
 
@@ -137,7 +137,7 @@ async def login_telegram(payload: TelegramLoginRequest, session: DBSession) -> T
 
     await _after_login(session, user)
     return TokenPair(
-        access_token=create_access_token(user.id, {"role": user.role.value}),
+        access_token=create_access_token(user.id, {"role": (user.role.value if hasattr(user.role, 'value') else user.role)}),
         refresh_token=create_refresh_token(user.id),
     )
 
@@ -185,7 +185,7 @@ async def login_telegram_oidc(payload: TelegramOidcRequest, session: DBSession) 
 
     await _after_login(session, user)
     return TokenPair(
-        access_token=create_access_token(user.id, {"role": user.role.value}),
+        access_token=create_access_token(user.id, {"role": (user.role.value if hasattr(user.role, 'value') else user.role)}),
         refresh_token=create_refresh_token(user.id),
     )
 
@@ -226,7 +226,7 @@ async def login_telegram_webapp(payload: WebAppLoginRequest, session: DBSession)
 
     await _after_login(session, user)
     return TokenPair(
-        access_token=create_access_token(user.id, {"role": user.role.value}),
+        access_token=create_access_token(user.id, {"role": (user.role.value if hasattr(user.role, 'value') else user.role)}),
         refresh_token=create_refresh_token(user.id),
     )
 
