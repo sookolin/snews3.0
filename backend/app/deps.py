@@ -51,6 +51,18 @@ async def get_current_user(
     if user is None or not user.is_active:
         raise AuthenticationError("User not found or inactive", code="user_inactive")
 
+    # Defensive normalization: ``role`` used to be persisted as the legacy
+    # uppercase Enum *name* (e.g. "SUPER_ADMIN") back when the column was a
+    # strict SQLAlchemy Enum. It's a plain string now and every permission
+    # check compares against the lowercase Enum *value* ("super_admin"), so
+    # normalize any leftover legacy value in-place (persisted on commit,
+    # same as the permissions merge below).
+    from shared.enums import UserRole
+
+    name_to_value = {r.name: r.value for r in UserRole}
+    if user.role in name_to_value:
+        user.role = name_to_value[user.role]
+
     # Merge role-level permission overrides (configured in Users → Права ролей)
     # into the user's effective permissions so they are picked up by the guard.
     try:
