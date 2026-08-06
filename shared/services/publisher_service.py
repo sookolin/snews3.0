@@ -93,7 +93,15 @@ class PublisherService:
         accumulate across calls and the status only becomes ``PUBLISHED`` once
         every target city's channels have been covered.
         """
-        news = await self.session.get(News, news_id)
+        # Lock the row for the duration of this publish call. This blocks any
+        # concurrent publish() call for the same news (double-tapped approve
+        # button, retried Celery task, simultaneous HTTP+bot approval) until
+        # the first one commits its `published_message_ids` update, so the
+        # "already published?" check below always sees fresh data instead of
+        # racing on a stale read — the root cause of duplicate channel sends.
+        news = await self.session.scalar(
+            select(News).where(News.id == news_id).with_for_update()
+        )
         if news is None:
             raise NotFoundError(f"News {news_id} not found")
         if news.city_id is None:

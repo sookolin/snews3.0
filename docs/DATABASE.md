@@ -30,7 +30,6 @@ erDiagram
         string[] keywords
         string[] extra_keywords
         string[] exclude_keywords
-        int telegram_topic_id
         bool is_active
     }
     SOURCES {
@@ -76,7 +75,6 @@ erDiagram
         int id PK
         int city_id FK
         string chat_id
-        int topic_id
         enum publish_mode
     }
     TEMPLATES {

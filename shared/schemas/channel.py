@@ -16,7 +16,6 @@ class ChannelBase(BaseModel):
     chat_id: str = Field(min_length=1, max_length=64)
     username: str | None = None
     avatar_url: str | None = None
-    topic_id: int | None = None
     publish_mode: ChannelPublishMode = ChannelPublishMode.IMMEDIATE
     is_active: bool = True
     schedule_from_minute: int | None = Field(default=None, ge=0, le=1439)
@@ -35,7 +34,6 @@ class ChannelUpdate(BaseModel):
     chat_id: str | None = None
     username: str | None = None
     avatar_url: str | None = None
-    topic_id: int | None = None
     publish_mode: ChannelPublishMode | None = None
     is_active: bool | None = None
     schedule_from_minute: int | None = Field(default=None, ge=0, le=1439)
@@ -52,7 +50,6 @@ class ChannelOut(ORMModel):
     chat_id: str
     username: str | None
     avatar_url: str | None
-    topic_id: int | None
     publish_mode: ChannelPublishMode
     is_active: bool
     schedule_from_minute: int | None

@@ -67,9 +67,6 @@ async def _notify_moderation(session, news_id: int) -> None:  # type: ignore[no-
 
     settings_service = SettingsService(session)
     tz_offset = int(await settings_service.get("ui.timezone_offset_hours", 3))
-    # World news go into their own dedicated topic when configured.
-    world_topic = int(await settings_service.get("telegram.world_topic_id", 0))
-    topic_override = world_topic if (news.is_world_news and world_topic) else None
 
     helper = NewsModerationService(session)
     service = TelegramAdminService()
@@ -80,7 +77,6 @@ async def _notify_moderation(session, news_id: int) -> None:  # type: ignore[no-
         rendered=await helper.render(news),
         source_name=await helper.resolve_source_name(news),
         tz_offset=tz_offset,
-        topic_id=topic_override,
         template=(await settings_service.get("moderation.card_template", "")) or None,
     )
     if message_id is not None:
@@ -100,7 +96,7 @@ async def _notify_moderation(session, news_id: int) -> None:  # type: ignore[no-
 
 @celery_app.task(name="workers.tasks.notify_moderation", bind=True, max_retries=2)
 def notify_moderation(self, news_id: int) -> dict:  # type: ignore[no-untyped-def]
-    """Send (or resend) a moderation card for a single news item to its topic."""
+    """Send (or resend) a moderation card for a single news item to the moderation group."""
 
     async def _run() -> dict:
         async with session_scope() as session:

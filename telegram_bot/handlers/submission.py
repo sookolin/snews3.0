@@ -1,6 +1,6 @@
 """User submission flow — /start, /suggest FSM: city → text → media → anonymity.
 
-Users propose news which land in the admin panel (and moderation topic) with
+Users propose news which land in the admin panel (and moderation group) with
 status PENDING and origin USER.
 """
 

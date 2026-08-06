@@ -27,13 +27,25 @@ class CityService:
         return city
 
     async def list(
-        self, offset: int = 0, limit: int = 50, active_only: bool = False
+        self,
+        offset: int = 0,
+        limit: int = 50,
+        active_only: bool = False,
+        allowed_city_ids: list[int] | None = None,
     ) -> tuple[list[City], int]:
+        """List cities.
+
+        ``allowed_city_ids`` restricts the result to that explicit id list
+        (per-city view scoping); ``None`` means unrestricted.
+        """
         stmt = select(City)
         count_stmt = select(func.count()).select_from(City)
         if active_only:
             stmt = stmt.where(City.is_active.is_(True))
             count_stmt = count_stmt.where(City.is_active.is_(True))
+        if allowed_city_ids is not None:
+            stmt = stmt.where(City.id.in_(allowed_city_ids))
+            count_stmt = count_stmt.where(City.id.in_(allowed_city_ids))
         total = await self.session.scalar(count_stmt) or 0
         rows = (
             await self.session.scalars(stmt.order_by(City.name).offset(offset).limit(limit))
@@ -105,9 +117,3 @@ class CityService:
         city = await self.get_or_404(city_id)
         await self.session.delete(city)
         await self.session.flush()
-
-    async def set_topic_id(self, city_id: int, topic_id: int) -> City:
-        city = await self.get_or_404(city_id)
-        city.telegram_topic_id = topic_id
-        await self.session.flush()
-        return city

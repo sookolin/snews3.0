@@ -184,6 +184,27 @@ export default function UsersPage() {
     setRolePermsModal({ ...rolePermsModal, [role]: { ...cur, city_scoped: nextScoped } });
   };
 
+  /** Unified single-control state for a city-scoped permission row. */
+  type UnifiedCityState = "role" | "grant" | "grant_selected" | "deny";
+  const unifiedCityStateOf = (role: string, perm: string): UnifiedCityState => {
+    const scope = cityScopeOf(role, perm);
+    if (scope.mode !== "role") {
+      if (scope.mode === "grant") return "grant";
+      if (scope.mode === "grant_selected") return "grant_selected";
+      // "deny" and legacy "deny_selected" both collapse to a plain deny in the UI.
+      return "deny";
+    }
+    // Fall back to the flat grant/deny override when no per-city config is set.
+    return rolePermStateOf(role, perm);
+  };
+
+  const setUnifiedCityState = (role: string, perm: string, next: UnifiedCityState) => {
+    // The unified control is the single source of truth for city-scoped perms;
+    // clear any flat grant/deny override so the two mechanisms never disagree.
+    setRolePermState(role, perm, "role");
+    setCityScopeMode(role, perm, next);
+  };
+
   const toggleCityScopeCity = (role: string, perm: string, cityId: number) => {
     if (!rolePermsModal) return;
     const cur = rolePermsModal[role] ?? { grant: [], deny: [], city_scoped: {} };
@@ -753,9 +774,11 @@ export default function UsersPage() {
             {Object.keys(rolePermsModal).map((role) => {
               const isOpen = expandedRole === role;
               return (
-              <div key={role} className="rounded-lg border border-border">
+              <div key={role} className="overflow-hidden rounded-lg border border-border">
                 <div
-                  className="flex cursor-pointer items-center justify-between border-b border-border bg-muted/40 px-4 py-2.5"
+                  className={`flex cursor-pointer items-center justify-between bg-muted/40 px-4 py-2.5 ${
+                    isOpen ? "border-b border-border" : ""
+                  }`}
                   onClick={() => setExpandedRole(isOpen ? null : role)}
                 >
                   <div className="flex items-center gap-2">
@@ -798,8 +821,9 @@ export default function UsersPage() {
                             const scope = cityScopeOf(role, p.value);
                             const requiredView = CITY_SCOPE_REQUIRES_VIEW[p.value];
                             const viewScope = requiredView ? cityScopeOf(role, requiredView) : null;
-                            const viewDeniesAll = requiredView ? viewScope?.mode === "deny" : false;
-                            return (
+                             const viewDeniesAll = requiredView ? viewScope?.mode === "deny" : false;
+                             const unifiedState = unifiedCityStateOf(role, p.value);
+                             return (
                               <div
                                 key={p.value}
                                 className="rounded border border-border/60 p-2"
@@ -816,39 +840,36 @@ export default function UsersPage() {
                                       )}
                                     </div>
                                   </div>
-                                  <Select
-                                    value={st}
-                                    onChange={(v) => setRolePermState(role, p.value, v as "grant" | "deny" | "role")}
-                                  >
-                                    <option value="role">По умолчанию</option>
-                                    <option value="grant">Разрешить</option>
-                                    <option value="deny">Запретить</option>
-                                  </Select>
+                                  {p.city_scoped ? (
+                                    <Select
+                                      value={unifiedState}
+                                      onChange={(v) => setUnifiedCityState(role, p.value, v as UnifiedCityState)}
+                                      disabled={viewDeniesAll}
+                                    >
+                                      <option value="role">По умолчанию</option>
+                                      <option value="grant">Разрешить</option>
+                                      <option value="grant_selected">Разрешить (выбранные)</option>
+                                      <option value="deny">Запретить</option>
+                                    </Select>
+                                  ) : (
+                                    <Select
+                                      value={st}
+                                      onChange={(v) => setRolePermState(role, p.value, v as "grant" | "deny" | "role")}
+                                    >
+                                      <option value="role">По умолчанию</option>
+                                      <option value="grant">Разрешить</option>
+                                      <option value="deny">Запретить</option>
+                                    </Select>
+                                  )}
                                 </div>
-                                {p.city_scoped && st !== "deny" && (
-                                  <div className="mt-2 border-t border-dashed border-border/60 pt-2">
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-xs text-muted-foreground">По городам:</span>
-                                      <div className="w-48">
-                                        <Select
-                                          value={scope.mode}
-                                          onChange={(v) => setCityScopeMode(role, p.value, v as CityScopeMode)}
-                                          disabled={viewDeniesAll}
-                                        >
-                                          <option value="role">По умолчанию</option>
-                                          <option value="grant">Разрешить</option>
-                                          <option value="grant_selected">Разрешить (выбранные)</option>
-                                          <option value="deny">Запретить</option>
-                                          <option value="deny_selected">Запретить (выбранные)</option>
-                                        </Select>
-                                      </div>
-                                      {viewDeniesAll && (
-                                        <span className="text-[11px] text-rose-500">
-                                          Нет прав на просмотр — редактирование недоступно
-                                        </span>
-                                      )}
-                                    </div>
-                                    {(scope.mode === "grant_selected" || scope.mode === "deny_selected") && !viewDeniesAll && (
+                                {p.city_scoped && (
+                                  <div className="mt-2">
+                                    {viewDeniesAll && (
+                                      <span className="text-[11px] text-rose-500">
+                                        Нет прав на просмотр — редактирование недоступно
+                                      </span>
+                                    )}
+                                    {unifiedState === "grant_selected" && !viewDeniesAll && (
                                       <div className="mt-2 flex max-h-32 flex-wrap gap-1 overflow-y-auto rounded-md border border-border p-1.5">
                                         {(cities?.items ?? [])
                                           .filter((c) => c.kind === "city" || !c.kind)

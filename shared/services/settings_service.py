@@ -31,7 +31,6 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "site.favicon_url": {"value": "", "category": "ui"},
     "bot.username": {"value": "", "category": "telegram"},
     # Separate moderation topic for world/federal news (like a city topic).
-    "telegram.world_topic_id": {"value": 0, "category": "telegram"},
     # Display timezone offset (hours) for moderator-facing timestamps.
     "ui.timezone_offset_hours": {"value": 3, "category": "ui"},
     # Layout of the moderation card in the topic. Empty = built-in layout.

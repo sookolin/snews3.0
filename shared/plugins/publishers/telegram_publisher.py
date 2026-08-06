@@ -1,6 +1,6 @@
 """Telegram publisher using aiogram Bot.
 
-Handles text-only posts, single media and albums, spoilers, topic threads and
+Handles text-only posts, single media and albums, spoilers, reply threading and
 custom captions. Media are uploaded from local processed paths, remote URLs or
 reused ``telegram_file_id`` values.
 """
@@ -37,8 +37,6 @@ _EMOJI_ERROR_MARKERS = (
     "emoji_invalid",
     "invalid emoji",
     "not enough rights to send custom emoji",
-    "message entities",
-    "entity",
 )
 
 
@@ -63,7 +61,7 @@ def strip_custom_emoji(text: str) -> str:
 
 @publisher_registry.register("telegram")
 class TelegramPublisher(BasePublisher):
-    """Publish a news item to a Telegram channel/chat/topic."""
+    """Publish a news item to a Telegram channel/chat."""
 
     publisher_type = "telegram"
 
@@ -186,8 +184,6 @@ class TelegramPublisher(BasePublisher):
         chat_id: int | str = self._normalize_chat_id(self.channel.chat_id)
 
         common: dict = {"chat_id": chat_id}
-        if self.channel.topic_id:
-            common["message_thread_id"] = self.channel.topic_id
         if request.reply_to_message_id:
             common["reply_to_message_id"] = request.reply_to_message_id
 
@@ -267,6 +263,18 @@ class TelegramPublisher(BasePublisher):
             return PublishResult(success=True, message_ids=message_ids)
         except Exception as exc:  # noqa: BLE001
             log.error("telegram_publish_failed", channel=self.channel.id, error=str(exc))
+            # A later group/message in this same post may fail after earlier
+            # groups already went out (e.g. album sent, then the caption's
+            # custom-emoji entity is rejected). Undo what was already sent so
+            # any retry (e.g. the custom-emoji fallback below) starts from a
+            # clean slate instead of re-sending already-delivered attachments
+            # on top of them (duplicate media in the channel).
+            if message_ids:
+                for mid in message_ids:
+                    try:
+                        await bot.delete_message(chat_id=chat_id, message_id=mid)
+                    except Exception:  # noqa: BLE001 - best effort cleanup
+                        pass
             return PublishResult(success=False, error=str(exc))
         finally:
             await bot.session.close()

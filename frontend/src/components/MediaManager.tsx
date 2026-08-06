@@ -153,8 +153,10 @@ export function MediaManager({ newsId, media, onChange }: Props) {
                   {src && (m.type === "video" ? (
                     <video src={src} className="h-full w-full object-cover" controls />
                   ) : (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={src} alt="" className={`h-full w-full object-cover ${m.is_spoiler ? "blur-md" : ""}`} />
+                    <a href={src} target="_blank" rel="noreferrer" title="Открыть в полном размере">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={src} alt="" className={`h-full w-full object-cover ${m.is_spoiler ? "blur-md" : ""}`} />
+                    </a>
                   ))}
                 </div>
                 <div className="text-xs text-muted-foreground">{m.type}</div>

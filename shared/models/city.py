@@ -1,4 +1,4 @@
-"""City model. Each city maps to a Telegram topic in the moderation group."""
+"""City model."""
 
 from __future__ import annotations
 
@@ -45,9 +45,6 @@ class City(Base, TimestampMixin):
     #: Marks the entry that collects everything that matched no city (world /
     #: unmatched news). Only meaningful for ``kind == "other"``.
     is_world_bucket: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-
-    # Telegram topic (thread) created automatically inside the moderation group
-    telegram_topic_id: Mapped[int | None] = mapped_column(Integer)
 
     # Default template override for this city
     template_id: Mapped[int | None] = mapped_column(Integer)

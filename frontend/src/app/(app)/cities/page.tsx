@@ -4,7 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import { api, fetcher } from "@/lib/api";
 import type { City, Page } from "@/lib/types";
-import { Copy, Pencil, PlugZap, RefreshCw, Trash2 } from "lucide-react";
+import { Copy, Pencil, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal, Field } from "@/components/Modal";
 import { Checkbox, Select } from "@/components/Controls";
@@ -23,7 +23,6 @@ interface CityForm {
   country?: string;
   language: string;
   is_active: boolean;
-  telegram_topic_id?: number | null;
   kind: string;
   is_world_bucket: boolean;
   weather_enabled: boolean;
@@ -34,7 +33,7 @@ interface CityForm {
 
 const EMPTY: CityForm = {
   name: "", description: "", keywords: "", extra_keywords: "", exclude_keywords: "",
-  region: "", country: "", language: "ru", is_active: true, telegram_topic_id: null,
+  region: "", country: "", language: "ru", is_active: true,
   kind: "city", is_world_bucket: false,
   weather_enabled: false, weather_time: "08:00", weather_lat: null, weather_lon: null,
 };
@@ -54,8 +53,8 @@ export default function CitiesPage() {
   const botUsername = String(settings?.["bot.username"] ?? "").replace(/^@/, "");
   const [form, setForm] = useState<CityForm | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [worldTopicName, setWorldTopicName] = useState("🌍 Мировые новости");
-  const [worldTopicModalOpen, setWorldTopicModalOpen] = useState(false);
+  const [worldBucketName, setWorldBucketName] = useState("🌍 Мировые новости");
+  const [worldBucketModalOpen, setWorldBucketModalOpen] = useState(false);
   const toast = useToast();
 
   const openNew = () => { setForm({ ...EMPTY }); setError(null); };
@@ -65,7 +64,6 @@ export default function CitiesPage() {
       keywords: fromArr(c.keywords), extra_keywords: fromArr(c.extra_keywords),
       exclude_keywords: fromArr(c.exclude_keywords), region: c.region ?? "",
       country: c.country ?? "", language: c.language, is_active: c.is_active,
-      telegram_topic_id: c.telegram_topic_id,
       kind: c.kind ?? "city", is_world_bucket: c.is_world_bucket ?? false,
       weather_enabled: c.weather_enabled ?? false,
       weather_time: c.weather_time ?? "08:00",
@@ -89,7 +87,6 @@ export default function CitiesPage() {
       country: form.country || null,
       language: form.language,
       is_active: form.is_active,
-      telegram_topic_id: form.telegram_topic_id ?? null,
       kind: form.kind,
       // Only a non-geographic entry can collect world / unmatched news.
       is_world_bucket: form.kind === "other" ? form.is_world_bucket : false,
@@ -134,34 +131,15 @@ export default function CitiesPage() {
     }
   };
 
-  const recreateTopic = async (id: number) => {
+  const createWorldBucket = async () => {
     try {
-      await api(`/cities/${id}/create-topic`, { method: "POST" });
-      mutate();
-      toast.success("Топик пересоздан");
-    } catch (e) {
-      toast.error((e as Error).message);
-    }
-  };
-
-  const testTopic = async (id: number) => {
-    try {
-      const r = await api<{ detail: string }>(`/cities/${id}/test-topic`, { method: "POST" });
-      toast.success("Топик привязан: " + r.detail);
-    } catch (e) {
-      toast.error("Ошибка: " + (e as Error).message);
-    }
-  };
-
-  const createWorldTopic = async () => {
-    try {
-      const r = await api<{ topic_id: number }>("/settings/world-topic", {
+      await api("/settings/world-bucket", {
         method: "POST",
-        body: JSON.stringify({ name: worldTopicName }),
+        body: JSON.stringify({ name: worldBucketName }),
       });
-      setWorldTopicModalOpen(false);
+      setWorldBucketModalOpen(false);
       mutate();
-      toast.success(`Топик мировых новостей создан (ID ${r.topic_id})`);
+      toast.success("Раздел мировых новостей создан");
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -173,8 +151,8 @@ export default function CitiesPage() {
         title="Города и разделы"
         action={
           <div className="flex gap-2">
-            <button className="btn-outline" onClick={() => setWorldTopicModalOpen(true)}>
-              Создать топик «Мировые»
+            <button className="btn-outline" onClick={() => setWorldBucketModalOpen(true)}>
+              Создать раздел «Мировые»
             </button>
             <button className="btn-primary" onClick={openNew}>Добавить раздел</button>
           </div>
@@ -189,7 +167,6 @@ export default function CitiesPage() {
             "Название",
             "Тип",
             "Ключевые слова",
-            "Topic ID",
             "Ссылка для предложки",
             "Активен",
             "Действия",
@@ -203,7 +180,6 @@ export default function CitiesPage() {
                   {c.is_world_bucket && <span className="ml-1" title="Собирает мировые новости">🌍</span>}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">{c.keywords.join(", ") || "—"}</td>
-                <td className="px-4 py-3">{c.telegram_topic_id ?? "—"}</td>
                 <td className="px-4 py-3">
                   {botUsername ? (
                     <div className="flex items-center gap-2">
@@ -237,12 +213,6 @@ export default function CitiesPage() {
                   <div className="flex justify-center gap-2">
                     <button className="btn-icon" title="Изменить" onClick={() => openEdit(c)}>
                       <Pencil className="h-4 w-4" />
-                    </button>
-                    <button className="btn-icon" title="Пересоздать топик" onClick={() => recreateTopic(c.id)}>
-                      <RefreshCw className="h-4 w-4" />
-                    </button>
-                    <button className="btn-icon-primary" title="Проверить привязку топика" onClick={() => testTopic(c.id)}>
-                      <PlugZap className="h-4 w-4" />
                     </button>
                     <button className="btn-icon-danger" title="Удалить" onClick={() => remove(c.id)}>
                       <Trash2 className="h-4 w-4" />
@@ -306,9 +276,6 @@ export default function CitiesPage() {
                   <option value="ru">ru</option>
                   <option value="en">en</option>
                 </Select>
-              </Field>
-              <Field label="Topic ID" hint="ID ветки в группе модерации Telegram. Создаётся автоматически, но можно задать вручную.">
-                <input className="input" type="number" value={form.telegram_topic_id ?? ""} onChange={(e) => upd({ telegram_topic_id: e.target.value ? Number(e.target.value) : null })} />
               </Field>
             </div>
             <Checkbox
@@ -379,22 +346,22 @@ export default function CitiesPage() {
         )}
       </Modal>
 
-      {/* World topic creation modal */}
+      {/* World news bucket creation modal */}
       <Modal
-        open={worldTopicModalOpen}
-        onClose={() => setWorldTopicModalOpen(false)}
-        title="Создать топик для мировых новостей"
+        open={worldBucketModalOpen}
+        onClose={() => setWorldBucketModalOpen(false)}
+        title="Создать раздел для мировых новостей"
       >
         <div className="space-y-4">
-          <Field label="Название топика" hint="Будет отображаться в группе модерации Telegram">
+          <Field label="Название раздела">
             <input
               className="input"
-              value={worldTopicName}
-              onChange={(e) => setWorldTopicName(e.target.value)}
+              value={worldBucketName}
+              onChange={(e) => setWorldBucketName(e.target.value)}
             />
           </Field>
           <div className="flex justify-end border-t border-border pt-4">
-            <button className="btn-primary" onClick={createWorldTopic}>
+            <button className="btn-primary" onClick={createWorldBucket}>
               Создать
             </button>
           </div>

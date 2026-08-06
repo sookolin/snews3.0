@@ -48,63 +48,40 @@ async def set_setting(
     return SettingOut.model_validate(obj)
 
 
-class WorldTopicCreate(pydantic.BaseModel):
+class WorldBucketCreate(pydantic.BaseModel):
     name: str = "🌍 Мировые новости"
 
 
-@router.post("/world-topic", response_model=dict)
-async def create_world_topic(
-    payload: WorldTopicCreate,
+@router.post("/world-bucket", response_model=dict)
+async def create_world_bucket(
+    payload: WorldBucketCreate,
     session: DBSession,
     _: User = Depends(require_permission(Permission.SETTINGS_MANAGE)),
 ) -> dict:
-    """Create the dedicated moderation topic for world news (like a city topic).
-
-    Stores the new thread id in ``telegram.world_topic_id`` so world news are
-    routed there instead of a city topic.  If a city with ``is_world_bucket``
-    exists its ``telegram_topic_id`` is updated to the same value so the
-    cities page shows the correct ID without a manual refresh.
-    """
+    """Create the dedicated world-news bucket city, if one doesn't exist yet."""
     from sqlalchemy import select
 
-    from shared.exceptions import ExternalServiceError
     from shared.models.city import City
-    from shared.services.telegram_admin import TelegramAdminService
 
-    topic_id = await TelegramAdminService().create_topic(payload.name)
-    if topic_id is None:
-        raise ExternalServiceError(
-            "Не удалось создать топик. Проверьте, что группа модерации — форум "
-            "и бот в ней администратор."
-        )
-    service = SettingsService(session)
-    await service.set("telegram.world_topic_id", topic_id, category="telegram")
-
-    # Update or create the world-bucket city so it appears in the news tabs
-    # and the city list without a separate manual step.
     world_city = await session.scalar(
         select(City).where(City.is_world_bucket.is_(True)).limit(1)
     )
-    if world_city is not None:
-        world_city.telegram_topic_id = topic_id
-    else:
-        # Auto-create the section so the news page shows a world tab immediately.
+    if world_city is None:
         world_city = City(
             name=payload.name,
-            slug=f"world-bucket-{topic_id}",
+            slug=f"world-bucket-{int(__import__('time').time())}",
             kind="other",
             is_world_bucket=True,
             is_active=True,
-            telegram_topic_id=topic_id,
             language="ru",
             keywords=[],
             extra_keywords=[],
             exclude_keywords=[],
         )
         session.add(world_city)
-    await session.commit()
+        await session.commit()
 
-    return {"topic_id": topic_id}
+    return {"city_id": world_city.id}
 
 
 @router.get("/audit/logs", response_model=Page[dict])

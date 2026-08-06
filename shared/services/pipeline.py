@@ -483,12 +483,14 @@ class IngestionPipeline:
             return None
 
         # Detect a follow-up: strongly similar to a recent published item but
-        # not an outright duplicate → publish as a reply to that message.
-        # Disabled by default: fuzzy matching threaded too many unrelated posts
-        # (every post in a busy channel ended up replying to the same message).
-        # Enable explicitly via ``pipeline.thread_follow_ups`` when desired.
+        # not an outright duplicate → publish as a reply to that message, so
+        # an updated/expanded version of a story reads as a continuation
+        # instead of a separate unrelated post. The similarity band in
+        # ``_find_follow_up_target`` is narrow specifically to avoid chaining
+        # unrelated posts together; disable via ``pipeline.thread_follow_ups``
+        # if it still produces false positives for a particular deployment.
         follow_up_of = None
-        if bool(await self.settings_service.get("pipeline.thread_follow_ups", False)):
+        if bool(await self.settings_service.get("pipeline.thread_follow_ups", True)):
             follow_up_of = await self._find_follow_up_target(item, primary.id)
 
         # 2) Persist raw news

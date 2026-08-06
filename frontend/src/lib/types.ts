@@ -10,7 +10,6 @@ export interface City {
   country?: string;
   language: string;
   is_active: boolean;
-  telegram_topic_id?: number;
   template_id?: number;
   /** "city" | "other" — "other" holds non-geographic sections (мир, интернет). */
   kind?: string;

@@ -1,8 +1,8 @@
-"""Telegram admin service — topic creation & moderation card delivery.
+"""Telegram admin service — moderation card delivery.
 
 Uses a short-lived aiogram Bot instance for administrative actions initiated by
-the backend/workers (creating a city's forum topic, sending the moderation card
-with inline buttons to the city's topic in the moderation group).
+the backend/workers, primarily sending the moderation card with inline buttons
+to the moderation group.
 """
 
 from __future__ import annotations
@@ -65,26 +65,6 @@ class TelegramAdminService:
             raise RuntimeError("Telegram bot token not configured")
         return Bot(token=self.token)
 
-    async def create_city_topic(self, city: City) -> int | None:
-        """Create a forum topic for a city in the moderation group.
-
-        Returns the topic (thread) id, or ``None`` if the group is not a forum
-        or the operation failed.
-        """
-        if not self.group_id:
-            log.warning("no_moderation_group_configured")
-            return None
-        bot = self._bot()
-        try:
-            topic = await bot.create_forum_topic(chat_id=self.group_id, name=city.name[:128])
-            log.info("topic_created", city=city.id, topic=topic.message_thread_id)
-            return topic.message_thread_id
-        except Exception as exc:  # noqa: BLE001
-            log.error("topic_create_failed", city=city.id, error=str(exc))
-            return None
-        finally:
-            await bot.session.close()
-
     async def fetch_chat_info(self, chat_id: str) -> dict | None:
         """Read a channel's real title, username and avatar URL from Telegram.
 
@@ -128,20 +108,6 @@ class TelegramAdminService:
         finally:
             await bot.session.close()
 
-    async def create_topic(self, name: str) -> int | None:
-        """Create an arbitrary forum topic (used for the world-news topic)."""
-        if not self.group_id:
-            return None
-        bot = self._bot()
-        try:
-            topic = await bot.create_forum_topic(chat_id=self.group_id, name=name[:128])
-            return topic.message_thread_id
-        except Exception as exc:  # noqa: BLE001
-            log.error("create_topic_failed", name=name, error=str(exc))
-            return None
-        finally:
-            await bot.session.close()
-
     async def delete_messages(self, chat_id: str, message_ids: list[int]) -> int:
         """Delete a batch of messages; returns how many were removed."""
         from shared.plugins.publishers.telegram_publisher import TelegramPublisher
@@ -159,29 +125,6 @@ class TelegramAdminService:
                 except Exception:  # noqa: BLE001 - already gone or too old
                     continue
             return removed
-        finally:
-            await bot.session.close()
-
-    async def test_topic(self, city: City) -> tuple[bool, str]:
-        """Send a test message to the city's topic to verify the binding."""
-        if not self.group_id:
-            return False, "Не задан ID группы модерации (TELEGRAM_MODERATION_GROUP_ID)"
-        bot = self._bot()
-        try:
-            kwargs: dict = {
-                "chat_id": self.group_id,
-                "text": f"✅ Проверка привязки топика для города «{city.name}».",
-            }
-            if city.telegram_topic_id:
-                kwargs["message_thread_id"] = city.telegram_topic_id
-            msg = await bot.send_message(**kwargs)
-            return (
-                True,
-                f"Сообщение доставлено (id={msg.message_id}, "
-                f"topic={city.telegram_topic_id})",
-            )
-        except Exception as exc:  # noqa: BLE001
-            return False, str(exc)
         finally:
             await bot.session.close()
 
@@ -437,13 +380,11 @@ class TelegramAdminService:
         rendered: str | None = None,
         source_name: str = "",
         tz_offset: int = 3,
-        topic_id: int | None = None,
         template: str | None = None,
     ) -> int | None:
-        """Send the moderation card to a topic. Returns the message id.
+        """Send the moderation card to the moderation group. Returns the message id.
 
-        ``topic_id`` overrides the city's topic — used to route world news into
-        their own dedicated topic. ``template`` is the configurable card layout
+        ``template`` is the configurable card layout
         (``settings.moderation.card_template``); ``None`` = built-in layout.
         """
         if not self.group_id:
@@ -455,9 +396,6 @@ class TelegramAdminService:
                 template=template,
             )
             common: dict = {"chat_id": self.group_id}
-            thread = topic_id or city.telegram_topic_id
-            if thread:
-                common["message_thread_id"] = thread
             keyboard = self.build_moderation_keyboard(news, lang)
 
             # Show a few attachments right on the card so moderators can see

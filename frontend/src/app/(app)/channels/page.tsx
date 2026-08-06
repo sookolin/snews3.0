@@ -19,7 +19,6 @@ interface Channel {
   chat_id: string;
   username?: string | null;
   avatar_url?: string | null;
-  topic_id?: number | null;
   publish_mode: string;
   is_active: boolean;
   min_interval_seconds: number;
@@ -154,7 +153,7 @@ export default function ChannelsPage() {
             {data?.items.map((c) => (
               <tr key={c.id} className="border-t border-border">
                 <td className="px-4 py-3 font-medium">{c.title}</td>
-                <td className="px-4 py-3 font-mono text-xs">{c.chat_id}{c.topic_id ? ` / ${c.topic_id}` : ""}</td>
+                <td className="px-4 py-3 font-mono text-xs">{c.chat_id}</td>
                 <td className="px-4 py-3">{cityName(c.city_id)}</td>
                 <td className="px-4 py-3">{MODES.find((m) => m.value === c.publish_mode)?.label ?? c.publish_mode}</td>
                 <td className="px-4 py-3">{c.is_active ? "Да" : "Нет"}</td>
@@ -201,14 +200,9 @@ export default function ChannelsPage() {
             {/* @username and the avatar are parsed from Telegram automatically
                 (on page load and via the refresh button), so they are not
                 editable here. */}
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="Topic ID" hint="Только для форум-групп (опционально)">
-                <input type="number" className="input" value={form.topic_id ?? ""} onChange={(e) => upd({ topic_id: e.target.value ? Number(e.target.value) : null })} />
-              </Field>
-              <Field label="Мин. интервал (сек)" hint="Пауза между постами">
-                <input type="number" className="input" value={form.min_interval_seconds ?? 0} onChange={(e) => upd({ min_interval_seconds: Number(e.target.value) })} />
-              </Field>
-            </div>
+            <Field label="Мин. интервал (сек)" hint="Пауза между постами">
+              <input type="number" className="input" value={form.min_interval_seconds ?? 0} onChange={(e) => upd({ min_interval_seconds: Number(e.target.value) })} />
+            </Field>
             <Field label="Режим публикации">
               <Select value={form.publish_mode ?? "immediate"} onChange={(v) => upd({ publish_mode: v })}>
                 {MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}

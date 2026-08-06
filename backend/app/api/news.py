@@ -726,7 +726,7 @@ async def send_to_moderation(
     session: DBSession,
     _: User = Depends(require_permission(Permission.NEWS_MODERATE)),
 ) -> Message:
-    """(Re)send the moderation card for this news to its city's Telegram topic."""
+    """(Re)send the moderation card for this news to the moderation group."""
     news = await _get_news(session, news_id)
     if news.city_id is None:
         from shared.exceptions import ValidationError

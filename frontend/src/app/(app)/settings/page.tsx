@@ -112,7 +112,6 @@ const META: Record<string, { label: string; hint: string; group: string }> = {
     hint: "Во всех сообщениях модерации время показывается с этим сдвигом. Для Москвы 3.",
     group: "Интерфейс",
   },
-  // telegram.world_topic_id removed — managed in Cities section
   "site.favicon_url": {
     label: "Favicon",
     hint: "URL иконки сайта (favicon.ico или ссылка на изображение).",

@@ -45,7 +45,6 @@ class CityUpdate(BaseModel):
     language: str | None = None
     is_active: bool | None = None
     template_id: int | None = None
-    telegram_topic_id: int | None = None
     kind: Literal["city", "other"] | None = None
     is_world_bucket: bool | None = None
     weather_enabled: bool | None = None
@@ -66,7 +65,6 @@ class CityOut(ORMModel):
     country: str | None
     language: str
     is_active: bool
-    telegram_topic_id: int | None
     template_id: int | None
     kind: str = "city"
     is_world_bucket: bool = False

@@ -30,8 +30,6 @@ class Channel(Base, TimestampMixin):
     # Public @username (for preview link), and avatar image URL for preview
     username: Mapped[str | None] = mapped_column(String(64))
     avatar_url: Mapped[str | None] = mapped_column(String(2048))
-    # Optional topic id if the channel is a forum
-    topic_id: Mapped[int | None] = mapped_column(Integer)
 
     publish_mode: Mapped[ChannelPublishMode] = mapped_column(
         Enum(ChannelPublishMode, native_enum=False, length=16),

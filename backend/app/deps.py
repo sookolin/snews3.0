@@ -110,14 +110,16 @@ def require_permission(
     return _guard
 
 
-def require_city_access(city_id: int | None, user: User) -> None:
+def require_city_access(
+    city_id: int | None, user: User, permission: Permission = Permission.NEWS_VIEW
+) -> None:
     """Raise ``PermissionDeniedError`` if ``user`` has no access to ``city_id``.
 
     ``city_id`` of ``None`` (world/unassigned news) is always allowed.
     """
     from shared.security import user_can_access_city
 
-    if not user_can_access_city(user, city_id):
+    if not user_can_access_city(user, city_id, permission):
         raise PermissionDeniedError(
             "Нет доступа к этому городу", code="city_access_denied"
         )

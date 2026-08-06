@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Film, ImageIcon, Paperclip } from "lucide-react";
 import type { NewsMedia } from "@/lib/types";
 
@@ -20,7 +20,26 @@ function assetUrl(m: NewsMedia): string | undefined {
  */
 export function MediaHoverPreview({ media }: { media: NewsMedia[] }) {
   const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLSpanElement>(null);
   const items = (media ?? []).filter((m) => m.is_enabled);
+
+  // Tap-to-toggle on touch devices (hover never fires there): close when a
+  // tap lands outside this component.
+  useEffect(() => {
+    if (!open) return;
+    const onOutside = (e: MouseEvent | TouchEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("touchstart", onOutside);
+    document.addEventListener("mousedown", onOutside);
+    return () => {
+      document.removeEventListener("touchstart", onOutside);
+      document.removeEventListener("mousedown", onOutside);
+    };
+  }, [open]);
+
   if (items.length === 0) return null;
 
   const photos = items.filter((m) => m.type === "photo").length;
@@ -28,13 +47,17 @@ export function MediaHoverPreview({ media }: { media: NewsMedia[] }) {
 
   return (
     <span
+      ref={rootRef}
       className="relative inline-flex"
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
     >
       <span
-        className="badge gap-1 cursor-default bg-slate-50 text-slate-600 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700"
+        role="button"
+        tabIndex={0}
+        className="badge gap-1 cursor-pointer bg-slate-50 text-slate-600 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700"
         title={`Вложений: ${items.length}`}
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
       >
         {videos > 0 && photos === 0 ? (
           <Film className="h-3 w-3" />
@@ -51,9 +74,14 @@ export function MediaHoverPreview({ media }: { media: NewsMedia[] }) {
           {items.slice(0, 4).map((m) => {
             const src = assetUrl(m);
             return (
-              <span
+              <a
                 key={m.id}
+                href={src}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(e) => e.stopPropagation()}
                 className="block h-20 w-24 shrink-0 overflow-hidden rounded bg-muted"
+                title="Открыть в полном размере"
               >
                 {src ? (
                   m.type === "video" || m.type === "animation" ? (
@@ -76,7 +104,7 @@ export function MediaHoverPreview({ media }: { media: NewsMedia[] }) {
                     {m.type}
                   </span>
                 )}
-              </span>
+              </a>
             );
           })}
           {items.length > 4 && (

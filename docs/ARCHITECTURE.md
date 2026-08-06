@@ -28,7 +28,7 @@ IngestionPipeline
   └─ AIService        (rewrite via provider plugin) → PENDING
         │
         ▼
-TelegramAdminService.send_moderation_card  → city topic (inline buttons)
+TelegramAdminService.send_moderation_card  → moderation group (inline buttons)
         │  Approve
         ▼
 PublisherService
