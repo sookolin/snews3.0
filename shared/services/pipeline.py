@@ -163,6 +163,9 @@ class IngestReport:
     unmatched: int = 0
     errors: int = 0
     created_ids: list[int] = field(default_factory=list)
+    #: Ids of auto-published news whose immediate publish task still needs to
+    #: be dispatched by the caller once the transaction is committed.
+    publish_now_ids: list[int] = field(default_factory=list)
 
 
 class IngestionPipeline:
@@ -539,8 +542,16 @@ class IngestionPipeline:
             await self.session.flush()
             from workers.tasks import _schedule_publication
 
-            await _schedule_publication(self.session, news)
+            slot = await _schedule_publication(self.session, news)
             await self.session.flush()
+            # The publish task must only be dispatched once this news row is
+            # actually committed — otherwise the Celery worker picking it up
+            # (a separate DB connection) may not see it yet and fail. The
+            # caller (ingest_source) commits the transaction and then
+            # dispatches for every id in this list, mirroring how it already
+            # defers moderation-card notifications until after the commit.
+            if slot == "immediate":
+                report.publish_now_ids.append(news.id)
 
         return news.id
 

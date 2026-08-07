@@ -34,7 +34,12 @@ def _news(**kwargs) -> News:  # type: ignore[no-untyped-def]
 
 
 async def test_first_item_publishes_immediately(db_session, monkeypatch) -> None:
-    """With an empty queue the first approval goes out at once."""
+    """With an empty queue the first approval goes out at once.
+
+    ``_schedule_publication`` itself must NOT dispatch the Celery task — that
+    is the caller's job, done only after its transaction commits (otherwise
+    the worker picking up the task may race a not-yet-committed row).
+    """
     from workers import tasks
 
     sent: list[int] = []
@@ -48,7 +53,7 @@ async def test_first_item_publishes_immediately(db_session, monkeypatch) -> None
     slot = await tasks._schedule_publication(db_session, item)
     assert slot == "immediate"
     assert item.scheduled_at is None
-    assert sent == [item.id]
+    assert sent == []
 
 
 async def test_second_item_is_spaced_after_recent_publication(db_session, monkeypatch) -> None:
@@ -100,7 +105,11 @@ async def test_queue_stacks_multiple_approvals(db_session, monkeypatch) -> None:
 
 
 async def test_immediate_flag_skips_the_queue(db_session, monkeypatch) -> None:
-    """publish_immediately bypasses spacing even with a busy queue."""
+    """publish_immediately bypasses spacing even with a busy queue.
+
+    Dispatch itself is the caller's responsibility (post-commit), not
+    ``_schedule_publication``'s — see the comment on the previous test.
+    """
     from workers import tasks
 
     sent: list[int] = []
@@ -118,4 +127,4 @@ async def test_immediate_flag_skips_the_queue(db_session, monkeypatch) -> None:
     slot = await tasks._schedule_publication(db_session, urgent)
     assert slot == "immediate"
     assert urgent.scheduled_at is None
-    assert sent == [urgent.id]
+    assert sent == []

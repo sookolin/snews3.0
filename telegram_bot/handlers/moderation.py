@@ -177,8 +177,18 @@ async def _approve(
 
             slot = await _schedule_publication(session, news, city_ids=approve_now)
         except Exception as exc:  # noqa: BLE001
+            slot = "—"
             log.warning("publish_enqueue_failed", news=news_id, error=str(exc))
         await session.commit()
+
+        # The publish task must only be dispatched once the row above is
+        # actually committed, otherwise the Celery worker picking it up (a
+        # separate DB connection) may not see it yet and fail with "News not
+        # found" — it then only recovers after a 120s retry.
+        if slot == "immediate":
+            from workers.tasks import publish_news
+
+            publish_news.delay(news_id, approve_now)
 
     # A news item already carries its own target cities and the normal publish
     # path sends it to all of their channels in one go (or a subset, for a

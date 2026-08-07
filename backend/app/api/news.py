@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 
@@ -307,6 +307,7 @@ async def approve_news(
     news_id: int,
     session: DBSession,
     meta: ClientMeta,
+    background_tasks: BackgroundTasks,
     publish: bool = True,
     actor: User = Depends(require_permission(Permission.NEWS_MODERATE)),
 ) -> NewsOut:
@@ -353,6 +354,7 @@ async def approve_news(
     news.moderated_by = actor.id
     news.status = NewsStatus.APPROVED
     await session.flush()
+    dispatch_immediate = False
 
     await AuditService(session).log(
         "news.approve",
@@ -380,6 +382,8 @@ async def approve_news(
             from workers.tasks import _schedule_publication
 
             slot = await _schedule_publication(session, news, city_ids=approve_now)
+            dispatch_immediate = slot == "immediate"
+            dispatch_city_ids = list(approve_now)
 
     # If some target cities remain unapproved (partial approval), the item
     # is not fully resolved yet — keep it visible to moderators of the
@@ -411,6 +415,19 @@ async def approve_news(
         keep_buttons=bool(remaining),
     )
     await session.refresh(news)
+
+    # The publish task must only be dispatched once this request's
+    # transaction is actually committed (done by the DBSession dependency's
+    # cleanup, which runs after this handler returns but before the response
+    # is sent) — otherwise the Celery worker picking it up (a separate DB
+    # connection) may not see the row yet and fail with "News not found",
+    # only recovering after a 120s retry. BackgroundTasks run after the
+    # response is sent, i.e. safely after that commit.
+    if dispatch_immediate:
+        from workers.tasks import publish_news
+
+        background_tasks.add_task(publish_news.delay, news_id, dispatch_city_ids)
+
     return _news_out(news)
 
 

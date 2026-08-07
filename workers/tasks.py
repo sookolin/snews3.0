@@ -32,6 +32,13 @@ def ingest_source(self, source_id: int) -> dict:  # type: ignore[no-untyped-def]
             report = await pipeline.process_source(source_id)
             await session.commit()
 
+            # Dispatch immediate-publish tasks only now that the news rows
+            # are committed and visible to the worker that will pick them up
+            # (see the comment in _schedule_publication for why this must
+            # not happen before the commit above).
+            for news_id in report.publish_now_ids:
+                publish_news.delay(news_id, None)
+
             # Send moderation cards for the newly created pending news.
             for news_id in report.created_ids:
                 await _notify_moderation(session, news_id)
@@ -238,6 +245,16 @@ async def _schedule_publication(session, news: News, city_ids: list[int] | None 
     item's target cities (partial approval by a city-restricted moderator);
     only those cities are considered for spacing and passed through to the
     eventual ``publish_news`` call.
+
+    IMPORTANT: this function only mutates ``news`` and flushes — it never
+    dispatches the ``publish_news`` Celery task itself. The task must only be
+    queued *after* the caller's transaction commits, otherwise the worker that
+    picks it up (a separate DB connection) may not see the not-yet-committed
+    row yet and fail with "News not found" — it then only recovers after a
+    120s retry, or not at all once retries run out. Callers must dispatch
+    using the returned slot: call ``publish_news.delay(news.id, city_ids)``
+    themselves once ``await session.commit()`` has completed, whenever the
+    returned value is ``"immediate"``.
     """
     from shared.enums import NewsStatus
     from shared.services.settings_service import SettingsService
@@ -245,7 +262,6 @@ async def _schedule_publication(session, news: News, city_ids: list[int] | None 
     if news.publish_immediately:
         news.scheduled_at = None
         news.status = NewsStatus.APPROVED
-        publish_news.delay(news.id, city_ids)
         return "immediate"
 
     interval = int(
@@ -254,7 +270,6 @@ async def _schedule_publication(session, news: News, city_ids: list[int] | None 
     if interval <= 0:
         news.scheduled_at = None
         news.status = NewsStatus.APPROVED
-        publish_news.delay(news.id, city_ids)
         return "immediate"
 
     now = datetime.now(timezone.utc)
@@ -316,7 +331,6 @@ async def _schedule_publication(session, news: News, city_ids: list[int] | None 
     if slot <= now:
         news.scheduled_at = None
         news.status = NewsStatus.APPROVED
-        publish_news.delay(news.id, city_ids)
         return "immediate"
 
     news.scheduled_at = slot
