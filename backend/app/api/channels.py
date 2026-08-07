@@ -66,10 +66,24 @@ async def sync_channel(
 
     service = CRUDService(session, Channel)
     channel = await service.get_or_404(channel_id)
+    raw = (channel.chat_id or "").strip()
+    if raw.startswith("+") or "joinchat" in raw.lower():
+        raise ExternalServiceError(
+            "Ссылка-приглашение (+... или joinchat) не подходит как Chat ID. "
+            "Для приватного канала укажите числовой ID вида -1001234567890 "
+            "(бот должен быть админом канала)."
+        )
     info = await TelegramAdminService().fetch_chat_info(channel.chat_id)
     if not info:
+        hint = (
+            "Проверьте, что бот добавлен в канал как администратор. "
+            if raw.lstrip("-").isdigit() or raw.startswith("@")
+            else "Указанный @username не найден — для приватного канала используйте "
+                 "числовой Chat ID (например -1001234567890), у приватных каналов нет "
+                 "публичного @username. "
+        )
         raise ExternalServiceError(
-            "Не удалось прочитать канал. Проверьте chat_id и что бот добавлен в канал."
+            f"Не удалось прочитать канал. {hint}Проверьте chat_id и что бот добавлен в канал."
         )
     if info.get("title"):
         channel.title = info["title"]

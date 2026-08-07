@@ -67,6 +67,22 @@ export default function ChannelsPage() {
     if (!form) return;
     setError(null);
     if (!form.city_id) { setError("Выберите город"); return; }
+    const rawChatId = (form.chat_id ?? "").trim();
+    if (!rawChatId) { setError("Укажите Chat ID канала"); return; }
+    const isNumeric = /^-?\d+$/.test(rawChatId);
+    const isInviteLink = rawChatId.startsWith("+") || /joinchat/i.test(rawChatId);
+    if (isInviteLink) {
+      setError(
+        "Ссылка-приглашение (+... или joinchat) не подходит для отправки сообщений. " +
+        "Для приватного канала укажите числовой ID вида -1001234567890 " +
+        "(его можно получить через @username_to_id_bot или из ссылки при пересылке сообщения из канала боту @JsonDumpBot)."
+      );
+      return;
+    }
+    if (!isNumeric && !rawChatId.startsWith("@") && !/^[A-Za-z0-9_]{5,}$/.test(rawChatId)) {
+      setError("Chat ID должен быть числом (например -1001234567890) или @username публичного канала");
+      return;
+    }
     try {
       const payload: Partial<Channel> = { ...form };
       for (const field of PARSED_FIELDS) delete payload[field];
@@ -194,8 +210,21 @@ export default function ChannelsPage() {
               </Select>
             </Field>
             <Field label="Название канала"><input className="input" value={form.title ?? ""} onChange={(e) => upd({ title: e.target.value })} /></Field>
-            <Field label="Chat ID / @username" hint="Например -1001234567890 или @mychannel. Бот должен быть админом канала.">
-              <input className="input font-mono" value={form.chat_id ?? ""} onChange={(e) => upd({ chat_id: e.target.value })} />
+            <Field
+              label="Chat ID / @username"
+              hint={
+                "Для публичного канала можно указать @username. " +
+                "Для приватного канала (без публичного username) укажите числовой ID вида -1001234567890 — " +
+                "его нельзя заменить ссылкой-приглашением (t.me/+... или joinchat). " +
+                "Бот должен быть администратором канала в обоих случаях."
+              }
+            >
+              <input
+                className="input font-mono"
+                placeholder="-1001234567890 или @mychannel"
+                value={form.chat_id ?? ""}
+                onChange={(e) => upd({ chat_id: e.target.value })}
+              />
             </Field>
             {/* @username and the avatar are parsed from Telegram automatically
                 (on page load and via the refresh button), so they are not
