@@ -12,6 +12,8 @@ import contextlib
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
+from sqlalchemy import select
+
 from shared.database import session_scope
 from shared.enums import NewsStatus, Permission
 from shared.i18n import t
@@ -70,6 +72,24 @@ async def handle_moderation(callback: CallbackQuery) -> None:
         await callback.answer(t("moderation.no_permission", lang), show_alert=True)
         return
 
+    # Telegram redelivers a callback_query if the bot doesn't answer it fast
+    # enough; without this guard a redelivered "approve"/"now" tap can enqueue
+    # a second publish before the first has rewritten the card's buttons.
+    # This is a short-lived, single-callback dedupe key (not the publish-time
+    # lock in workers/tasks.py, which guards the actual Telegram send).
+    if action in ("approve", "now", "reject", "delete", "purge", "unpublish"):
+        from shared.redis_client import get_redis
+
+        redis = get_redis()
+        dedupe_key = f"lock:mod_callback:{callback.id}"
+        try:
+            first_seen = await redis.set(dedupe_key, "1", nx=True, ex=30)
+        except Exception:  # noqa: BLE001 - never block moderation on Redis hiccups
+            first_seen = True
+        if not first_seen:
+            await callback.answer()
+            return
+
     if action == "approve":
         await _approve(callback, news_id, lang)
     elif action == "now":
@@ -108,7 +128,11 @@ async def _approve(
     who = "—"
     slot = "immediate"
     async with session_scope() as session:
-        news = await session.get(News, news_id)
+        # Lock the row so a second tap (real double-tap, not just a
+        # redelivered callback — see the callback.id dedupe above) landing
+        # while this one is still writing blocks until this transaction
+        # commits, instead of both reading the same "not yet approved" state.
+        news = await session.scalar(select(News).where(News.id == news_id).with_for_update())
         if news is None:
             await callback.answer("Новость не найдена", show_alert=True)
             return

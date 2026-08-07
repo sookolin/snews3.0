@@ -13,6 +13,7 @@ import useSWR from "swr";
 import { cn } from "@/lib/utils";
 import { fetcher } from "@/lib/api";
 import { getPreviewRole, setPreviewRole, useRoleLabels } from "@/lib/roles";
+import { ROUTE_PERMISSION, useMyPermissions } from "@/lib/permissions";
 
 const SECTIONS: { title: string; items: { href: string; label: string; icon: typeof Newspaper }[] }[] = [
   {
@@ -54,21 +55,7 @@ const SECTIONS: { title: string; items: { href: string; label: string; icon: typ
   },
 ];
 
-const ITEM_PERMISSION: Record<string, string> = {
-  "/news": "news:view",
-  "/compose": "news:edit",
-  "/ads": "channel:manage",
-  "/sources": "source:view",
-  "/cities": "city:view",
-  "/channels": "channel:manage",
-  "/templates": "template:manage",
-  "/watermarks": "watermark:manage",
-  "/ai": "ai:manage",
-  "/queue": "monitoring:view",
-  "/users": "user:view",
-  "/logs": "logs:view",
-  "/settings": "settings:manage",
-};
+const ITEM_PERMISSION = ROUTE_PERMISSION;
 
 export function Sidebar({
   onCollapse,
@@ -97,11 +84,18 @@ export function Sidebar({
     { revalidateOnFocus: false }
   );
   const labels = useRoleLabels();
+  const { permissions: myPermissions } = useMyPermissions();
   const allowed = previewRole ? catalog?.roles?.[previewRole] : undefined;
   const visible = (href: string) => {
     const need = ITEM_PERMISSION[href];
-    if (!previewRole || !need || !allowed) return true;
-    return allowed.includes(need);
+    if (!need) return true;
+    // Previewing another role: simulate that role's tab visibility.
+    if (previewRole) return !!allowed?.includes(need);
+    // Real (non-preview) session: gate by the actual logged-in user's
+    // effective permissions, not just the role simulation — a tab the user
+    // has no access to must never be reachable at all, not even by URL.
+    if (!myPermissions) return false; // still loading — don't flash it open
+    return myPermissions.has(need);
   };
 
   // Icon-only: compact strip showing only icons with tooltips.

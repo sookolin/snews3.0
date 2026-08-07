@@ -237,6 +237,22 @@ async def me(user: CurrentUser) -> UserOut:
     return UserOut.model_validate(user)
 
 
+@router.get("/permissions", response_model=list[str])
+async def my_permissions(user: CurrentUser) -> list[str]:
+    """Return the effective permission values for the current user.
+
+    Any authenticated user may call this (unlike ``/users/permissions``,
+    which requires ``user:view`` and returns the full catalog for the admin
+    panel). This is what the sidebar/route guards use to decide what a real,
+    non-preview session may see — it must not depend on ``user:view`` or
+    every user without that permission would fall back to "show everything".
+    """
+    from shared.enums import Permission
+    from shared.security import user_has_permission
+
+    return [p.value for p in Permission if user_has_permission(user, p)]
+
+
 @router.post("/2fa/setup", response_model=TwoFactorSetup)
 async def setup_2fa(user: CurrentUser, session: DBSession) -> TwoFactorSetup:
     """Generate a TOTP secret for the current user (not yet enabled)."""

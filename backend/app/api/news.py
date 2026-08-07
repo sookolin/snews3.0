@@ -323,6 +323,14 @@ async def approve_news(
     """
     news = await _get_news(session, news_id, actor)
 
+    # Lock the row for the rest of this request: two near-simultaneous
+    # approve calls (double-click, or the same click firing twice) would
+    # otherwise both read the same `approved_city_ids` before either commits
+    # and both enqueue an identical publish task. This blocks the second
+    # request until the first commits, so it sees the up-to-date
+    # `approved_city_ids` and finds nothing left to approve.
+    news = await session.scalar(select(News).where(News.id == news_id).with_for_update())
+
     await session.refresh(news, attribute_names=["target_cities"])
     all_target_ids = [c.id for c in (news.target_cities or [])] or (
         [news.city_id] if news.city_id else []
@@ -753,6 +761,10 @@ async def publish_now(
     moderation card) when queue-based spacing is desired.
     """
     news = await _get_news(session, news_id, actor)
+
+    # Same rationale as approve_news: lock the row against a double-click (or
+    # duplicated request) racing on `approved_city_ids`/`published_message_ids`.
+    news = await session.scalar(select(News).where(News.id == news_id).with_for_update())
 
     await session.refresh(news, attribute_names=["target_cities"])
     all_target_ids = [c.id for c in (news.target_cities or [])] or (

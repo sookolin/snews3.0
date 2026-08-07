@@ -382,11 +382,14 @@ async def list_users(
     actor: User = Depends(require_permission(Permission.USER_VIEW)),
     params: PaginationParams = Depends(),
 ) -> Page[UserOut]:
-    users, total = await UserService(session).list(params.offset, params.size)
-    # Super admins are only visible to other super admins.
-    if actor.role != UserRole.SUPER_ADMIN:
-        users = [u for u in users if u.role != UserRole.SUPER_ADMIN]
-        total = len(users)
+    # Super admins are only visible to other super admins. Filtered at the SQL
+    # level (before pagination) so `total`/the page contents stay correct —
+    # filtering the already-paginated page in Python would both under-report
+    # `total` and drop rows near a page boundary without backfilling them.
+    exclude_super_admin = actor.role != UserRole.SUPER_ADMIN
+    users, total = await UserService(session).list(
+        params.offset, params.size, exclude_super_admin=exclude_super_admin
+    )
     return Page.create([UserOut.model_validate(u) for u in users], total, params)
 
 

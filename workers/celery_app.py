@@ -36,6 +36,15 @@ celery_app.conf.update(
     task_track_started=True,
     result_expires=3600,
     broker_connection_retry_on_startup=True,
+    # `task_acks_late` only ACKs a message after the task finishes, so a
+    # worker crash/restart mid-task makes the broker redeliver the SAME
+    # message to another worker. Redis' default visibility timeout is 1h —
+    # far longer than any of our tasks should ever run — but keeping it
+    # tight limits how long a crashed worker can leave a duplicate delivery
+    # window open. `publish_news` additionally uses its own Redis lock (see
+    # workers/tasks.py) as the real guard against duplicate Telegram sends;
+    # this just reduces the odds of a stale redelivery in the first place.
+    broker_transport_options={"visibility_timeout": 600},
 )
 
 # Periodic schedule (Celery Beat).

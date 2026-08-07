@@ -862,14 +862,9 @@ export default function UsersPage() {
                                     </Select>
                                   )}
                                 </div>
-                                {p.city_scoped && (
+                                {p.city_scoped && !viewDeniesAll && (
                                   <div className="mt-2">
-                                    {viewDeniesAll && (
-                                      <span className="text-[11px] text-rose-500">
-                                        Нет прав на просмотр — редактирование недоступно
-                                      </span>
-                                    )}
-                                    {unifiedState === "grant_selected" && !viewDeniesAll && (
+                                    {unifiedState === "grant_selected" && (
                                       <div className="mt-2 flex max-h-32 flex-wrap gap-1 overflow-y-auto rounded-md border border-border p-1.5">
                                         {(cities?.items ?? [])
                                           .filter((c) => c.kind === "city" || !c.kind)

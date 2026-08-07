@@ -13,10 +13,26 @@ from shared.models.source import Source
 from shared.models.user import User
 from shared.schemas.common import Message, Page, PaginationParams
 from shared.schemas.source import SourceCreate, SourceOut, SourceUpdate
+from shared.security import user_city_access
 from shared.services.audit_service import AuditService
 from shared.services.crud import CRUDService
 
 router = APIRouter()
+
+
+def _check_source_city_access(source: Source, actor: User, permission: Permission) -> None:
+    """Enforce city-scoped RBAC for a single source: the actor must have
+    access to at least one of the source's linked cities, or the source has
+    no city link at all (global sources aren't gated by city).
+    """
+    from shared.exceptions import PermissionDeniedError
+
+    allowed = user_city_access(actor, permission)
+    if allowed is None:
+        return
+    linked = [c.id for c in (source.cities or [])]
+    if linked and not any(cid in allowed for cid in linked):
+        raise PermissionDeniedError("Нет доступа к этому источнику", code="city_access_denied")
 
 
 async def _set_source_cities(session: DBSession, source_id: int, city_ids: list[int]) -> None:
@@ -41,9 +57,9 @@ async def list_sources(
     session: DBSession,
     params: PaginationParams = Depends(),
     city_id: int | None = None,
-    _: User = Depends(require_permission(Permission.SOURCE_VIEW)),
+    actor: User = Depends(require_permission(Permission.SOURCE_VIEW)),
 ) -> Page[SourceOut]:
-    from sqlalchemy import func
+    from sqlalchemy import func, or_
     from sqlalchemy.orm import selectinload
     from shared.models.source import source_cities
 
@@ -57,6 +73,18 @@ async def list_sources(
         count_stmt = count_stmt.join(source_cities, source_cities.c.source_id == Source.id).where(
             source_cities.c.city_id == city_id
         )
+
+    # City-scoped SOURCE_VIEW: only show sources linked to an allowed city,
+    # or with no city link at all (global sources aren't tied to any city).
+    allowed = user_city_access(actor, Permission.SOURCE_VIEW)
+    if allowed is not None:
+        allowed_stmt = select(source_cities.c.source_id).where(source_cities.c.city_id.in_(allowed))
+        scope = or_(
+            Source.id.in_(allowed_stmt),
+            ~Source.id.in_(select(source_cities.c.source_id)),
+        )
+        stmt = stmt.where(scope)
+        count_stmt = count_stmt.where(scope)
 
     total = await session.scalar(count_stmt) or 0
     rows = (
@@ -97,7 +125,7 @@ async def create_source(
 async def get_source(
     source_id: int,
     session: DBSession,
-    _: User = Depends(require_permission(Permission.SOURCE_VIEW)),
+    actor: User = Depends(require_permission(Permission.SOURCE_VIEW)),
 ) -> SourceOut:
     source = await session.scalar(
         select(Source).options(selectinload(Source.cities)).where(Source.id == source_id)
@@ -106,6 +134,7 @@ async def get_source(
         from shared.exceptions import NotFoundError
 
         raise NotFoundError(f"Source {source_id} not found")
+    _check_source_city_access(source, actor, Permission.SOURCE_VIEW)
     return SourceOut.model_validate(source)
 
 
@@ -119,6 +148,8 @@ async def update_source(
 ) -> SourceOut:
     service = CRUDService(session, Source)
     source = await service.get_or_404(source_id)
+    await session.refresh(source, attribute_names=["cities"])
+    _check_source_city_access(source, actor, Permission.SOURCE_MANAGE)
     data = payload.model_dump(exclude_unset=True)
     city_ids = data.pop("city_ids", None)
     for key, value in data.items():
@@ -149,7 +180,11 @@ async def delete_source(
     meta: ClientMeta,
     actor: User = Depends(require_permission(Permission.SOURCE_MANAGE)),
 ) -> Message:
-    await CRUDService(session, Source).delete(source_id)
+    service = CRUDService(session, Source)
+    source = await service.get_or_404(source_id)
+    await session.refresh(source, attribute_names=["cities"])
+    _check_source_city_access(source, actor, Permission.SOURCE_MANAGE)
+    await service.delete(source_id)
     await AuditService(session).log(
         "source.delete",
         user_id=actor.id,

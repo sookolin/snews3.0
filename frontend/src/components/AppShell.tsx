@@ -12,6 +12,7 @@ import { BellButton } from "@/components/BellButton";
 import { useProfileWatcher } from "@/lib/useProfileWatcher";
 import { useRoleLabels } from "@/lib/roles";
 import { useNewsPing } from "@/lib/useNewsPing";
+import { canAccessRoute, useMyPermissions } from "@/lib/permissions";
 
 const COLLAPSE_KEY = "snews.sidebar.collapsed";
 
@@ -38,6 +39,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   useProfileWatcher();
   useNewsPing();
+  const { permissions: myPermissions, isLoading: permsLoading } = useMyPermissions();
 
   useEffect(() => {
     if (getToken()) {
@@ -50,6 +52,16 @@ export function AppShell({ children }: { children: ReactNode }) {
       else router.replace("/login");
     });
   }, [router]);
+
+  // Route guard: block direct URL navigation to a page the current user has
+  // no permission for — the sidebar hiding the link is not enough, typing
+  // the URL must not work either.
+  useEffect(() => {
+    if (!ready || permsLoading) return;
+    if (!canAccessRoute(myPermissions, pathname)) {
+      router.replace("/dashboard");
+    }
+  }, [ready, permsLoading, myPermissions, pathname, router]);
 
   useEffect(() => {
     setCollapsed(localStorage.getItem(COLLAPSE_KEY) === "1");
@@ -82,7 +94,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const initials = (me?.full_name || me?.email || "?").slice(0, 2).toUpperCase();
 
-  if (!ready) {
+  const blocked = ready && !permsLoading && !canAccessRoute(myPermissions, pathname);
+
+  if (!ready || permsLoading || blocked) {
     return (
       <div className="flex h-screen items-center justify-center text-muted-foreground">
         Загрузка…

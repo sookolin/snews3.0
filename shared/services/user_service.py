@@ -51,11 +51,28 @@ class UserService:
     async def get_by_telegram_id(self, telegram_id: int) -> User | None:
         return await self.session.scalar(select(User).where(User.telegram_id == telegram_id))
 
-    async def list(self, offset: int = 0, limit: int = 50) -> tuple[list[User], int]:
-        total = await self.session.scalar(select(func.count()).select_from(User)) or 0
+    async def list(
+        self, offset: int = 0, limit: int = 50, exclude_super_admin: bool = False
+    ) -> tuple[list[User], int]:
+        """List users, paginated.
+
+        ``exclude_super_admin`` filters super admins out at the SQL level
+        (before pagination) so `total` and the returned page are both
+        correct for a non-super-admin actor — filtering after the fact would
+        both under-report `total` and silently drop rows near a page
+        boundary instead of backfilling from the next ones.
+        """
+        stmt = select(User)
+        count_stmt = select(func.count()).select_from(User)
+        if exclude_super_admin:
+            from shared.enums import UserRole
+
+            stmt = stmt.where(User.role != UserRole.SUPER_ADMIN.value)
+            count_stmt = count_stmt.where(User.role != UserRole.SUPER_ADMIN.value)
+        total = await self.session.scalar(count_stmt) or 0
         rows = (
             await self.session.scalars(
-                select(User).order_by(User.created_at.desc()).offset(offset).limit(limit)
+                stmt.order_by(User.created_at.desc()).offset(offset).limit(limit)
             )
         ).all()
         return list(rows), total

@@ -384,14 +384,38 @@ def publish_news(self, news_id: int, city_ids: list[int] | None = None) -> dict:
     """
 
     async def _run() -> dict:
-        async with session_scope() as session:
-            news = await PublisherService(session).publish(news_id, city_ids=city_ids)
-            await session.commit()
-            # Refresh the moderation card so it switches to the published button
-            # set (снять с публикации / удалить полностью) instead of keeping the
-            # pre-decision buttons.
-            await _refresh_card_after_publish(session, news)
-            return {"news_id": news_id, "status": news.status.value}
+        # Distributed lock guarding against duplicate Telegram sends from two
+        # full executions of this task for the same news item — e.g. a broker
+        # redelivery of the same message after a worker crash/restart (with
+        # `task_acks_late`, an unACKed message is redelivered and can run on a
+        # second worker), or a double-enqueue from the approve endpoints. The
+        # DB row lock inside PublisherService.publish() only serializes two
+        # *concurrent* executions; it does not stop a second execution that
+        # starts after the first already sent to Telegram but crashed before
+        # committing/acking. The lock is held for the whole publish attempt
+        # and simply skipped if held by another worker.
+        from shared.redis_client import get_redis
+
+        redis = get_redis()
+        lock_key = f"lock:publish_news:{news_id}"
+        acquired = await redis.set(lock_key, "1", nx=True, ex=180)
+        if not acquired:
+            log.warning("publish_news_skipped_locked", news=news_id)
+            return {"news_id": news_id, "status": "locked_skipped"}
+        try:
+            async with session_scope() as session:
+                news = await PublisherService(session).publish(news_id, city_ids=city_ids)
+                await session.commit()
+                # Refresh the moderation card so it switches to the published
+                # button set (снять с публикации / удалить полностью) instead
+                # of keeping the pre-decision buttons.
+                await _refresh_card_after_publish(session, news)
+                return {"news_id": news_id, "status": news.status.value}
+        finally:
+            try:
+                await redis.delete(lock_key)
+            except Exception:  # noqa: BLE001 - lock will simply expire (ex=180)
+                pass
 
     try:
         return run_async(_run())

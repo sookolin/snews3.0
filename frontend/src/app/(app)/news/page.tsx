@@ -49,6 +49,9 @@ export default function NewsPage() {
   const [scheduling, setScheduling] = useState<NewsItem | null>(null);
   const [scheduleAt, setScheduleAt] = useState("");
   const [error, setError] = useState<string | null>(null);
+  //: News ids with an in-flight moderation action — disables their buttons so
+  //: a double-click can't fire the same request (e.g. approve) twice.
+  const [pendingIds, setPendingIds] = useState<number[]>([]);
   //: When on, every row shows its news text inline (no click needed).
   const [alwaysText, setAlwaysText] = useState(false);
   useEffect(() => {
@@ -190,8 +193,13 @@ export default function NewsPage() {
     }
   };
 
-  const act = (id: number, action: "approve" | "reject" | "unpublish") =>
-    run(() => api(`/news/${id}/${action}`, { method: "POST" }));
+  const act = (id: number, action: "approve" | "reject" | "unpublish") => {
+    if (pendingIds.includes(id)) return; // already in flight — ignore extra clicks
+    setPendingIds((p) => [...p, id]);
+    return run(() => api(`/news/${id}/${action}`, { method: "POST" })).finally(() => {
+      setPendingIds((p) => p.filter((x) => x !== id));
+    });
+  };
 
   const remove = async (id: number) => {
     if (!(await confirm({ message: "Удалить новость безвозвратно?", danger: true }))) return;
@@ -493,6 +501,7 @@ export default function NewsPage() {
                           <button
                             className="btn-icon-success"
                             title="Одобрить"
+                            disabled={pendingIds.includes(n.id)}
                             onClick={() => act(n.id, "approve")}
                           >
                             <Check className="h-4 w-4" />
@@ -500,6 +509,7 @@ export default function NewsPage() {
                           <button
                             className="btn-icon-danger"
                             title="Отклонить"
+                            disabled={pendingIds.includes(n.id)}
                             onClick={() => act(n.id, "reject")}
                           >
                             <X className="h-4 w-4" />
@@ -519,6 +529,7 @@ export default function NewsPage() {
                         <button
                           className="btn-icon-danger"
                           title="Снять с публикации (удалить из канала)"
+                          disabled={pendingIds.includes(n.id)}
                           onClick={() => act(n.id, "unpublish")}
                         >
                           <Undo2 className="h-4 w-4" />
